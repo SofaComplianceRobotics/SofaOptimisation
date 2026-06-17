@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sofaopt"
+version = "0.1.0"
+description = "Parallel CMA-ES optimization driver and live dashboard for SOFA simulations — bring any scene, any SOFA build."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "César Desmarets" }]
+keywords = ["sofa", "optimization", "cma-es", "optuna", "simulation"]
+
+# Core runtime: just the optimizer. The framework launches SOFA as a
+# subprocess, so SOFA itself is NOT a Python dependency — any install with
+# SofaPython3 works, configured via the project's runsofa_exe / sofa_env.
+dependencies = [
+    "optuna>=3.0",
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+# The live web dashboard (optional — the optimizer runs headless without it).
+dashboard = ["dash>=2.0", "plotly>=5.0"]
+# STL preview rendering for shape-optimization projects (optional).
+preview = ["pyvista>=0.40"]
+dev = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/your-org/sofaopt"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sofaopt = ["dashboard/assets/*"]
