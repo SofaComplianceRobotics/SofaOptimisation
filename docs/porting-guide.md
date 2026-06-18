@@ -145,15 +145,18 @@ PROJECT = SofaOptProject(
 ### Tests (`TestSpec`)
 
 - `scene_file` is launched via `runSofa`.
-- `run_count > 1` repeats a test (e.g. randomized scenarios) and aggregates with
-  `score_aggregation` (`"mean"`, `"median"`, `"min"`, `"max"`, `"sum"`,
-  `"exponential_coverage"`).
+- `run_count` — how many times to run this test per trial (e.g. several
+  randomized scenarios). `score_aggregation` is how those repeats are combined
+  into the test's score: `"mean"` (default), `"median"`, or `"sum"`. Both are
+  fields on the `TestSpec`:
+
+  ```python
+  TestSpec("reach", scene_file=..., run_count=3, score_aggregation="mean", max_score=100)
+  ```
+
 - `max_score` normalizes the test to `[0,1]`; `weight` combines tests.
 - `gated=True`: only run this test once an *ungated* test has
   scored above zero for the candidate.
-- `relaunchable=True`: advanced — runs an *iterative probe* across several short
-  `runSofa` launches, carrying state between them. See
-  [§5b. Iterative probes](#5b-iterative-probes-relaunchable-tests).
 
 ---
 
@@ -203,74 +206,6 @@ gains, …) need **no hook at all** — just read `trial.params` in the scene.
 Other optional hooks: `constrain_params(params)->params` (enforce
 cross-parameter relationships before use) and
 `on_generation_end(gen, paths)` (cross-generation carryover).
-
----
-
-## 5b. Iterative probes (relaunchable tests)
-
-Most tests run once: the scene starts, simulates, writes one score, exits. A
-**relaunchable** test instead runs the *same* scene several times in a row,
-carrying state forward each time — useful for a search/probe that refines a
-value across attempts (e.g. "find the heaviest cube this gripper can still
-hold" by trying weights one after another).
-
-Turn it on in two places:
-
-```python
-# in project.py
-TestSpec("hold_probe", scene_file=..., relaunchable=True)   # this test
-PROJECT = SofaOptProject(..., max_run_relaunches=20)        # safety cap on retries
-```
-
-**The key fact: each relaunch is a brand-new `runSofa` process, so nothing in
-memory survives.** You carry state across launches by writing it to disk. The
-scene API gives you two helpers that do exactly that, scoped to this run:
-
-- `trial.load_carry()` → the dict you saved last launch (`{}` on the first).
-- `trial.save_carry(d)` → persist a dict for the next launch.
-
-And you end each iteration one of two ways:
-
-- `trial.relaunch(carry={...})` — save state and **go again** (another launch).
-- `trial.write_score(score, reason)` — **done**, stop relaunching, report.
-
-So the scene's controller looks like this:
-
-```python
-from sofaopt.scene import open_trial
-
-def createScene(root):
-    trial = open_trial(root)
-    state = trial.load_carry()                 # {} on the first launch
-    rung   = state.get("rung", 0)              # which step of the probe we're on
-    best   = state.get("best", 0.0)
-
-    weight_to_try = 5.0 + 5.0 * rung           # <-- modify values between relaunches here
-    # ... build the scene using weight_to_try (and trial.params, the mesh, etc.) ...
-    root.addObject(ProbeController(trial, root, rung, best, weight_to_try))
-    return root
-
-class ProbeController(Sofa.Core.Controller):
-    def onAnimateEndEvent(self, e):
-        if not finished_this_attempt:
-            return
-        if attempt_succeeded and rung < 9:           # keep climbing
-            trial.relaunch(carry={"rung": rung + 1, "best": weight_to_try})
-        else:                                        # converged / ran out
-            trial.write_score(best, reason=f"max held weight {best}")
-```
-
-Mechanics, in one paragraph: when you call `relaunch()`, sofaopt sees the run
-exited *without* a final score but *with* a "probe finished" flag, so it starts
-the slot again (clearing the flag); your next `open_trial().load_carry()` sees
-the values you saved, and you adjust the scene accordingly. If a relaunchable
-run ever exits *without* calling `relaunch()` or `write_score()` (i.e. it
-crashed), sofaopt fails it rather than retrying a deterministic crash. The
-`max_run_relaunches` cap stops a probe that never converges from looping
-forever.
-
-> Leave `relaunchable=False` (the default) unless you specifically need this —
-> a normal one-shot scene is simpler in every way.
 
 ---
 

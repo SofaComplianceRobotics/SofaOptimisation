@@ -116,8 +116,8 @@ class TestSpec:
             ``trial.load_carry()``. Relaunches are capped by the project's
             ``max_run_relaunches`` (which must be > 0). Leave False for ordinary
             one-shot scenes.
-        score_aggregation: How repeats are combined: ``"mean"``, ``"median"``,
-            ``"min"``, ``"max"``, or ``"sum"``.
+        score_aggregation: How ``run_count`` repeats are combined into this
+            test's score: ``"mean"`` (default), ``"median"``, or ``"sum"``.
         default_selected: Whether the dashboard pre-selects this test.
     """
 
