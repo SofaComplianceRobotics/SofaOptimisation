@@ -109,6 +109,11 @@ class TestSpec:
         gated: If True, this test is only run once an *ungated* test has scored
             above zero for the trial — used to skip expensive tests on hopeless
             candidates. Pure quality-of-life; safe to leave False.
+        relaunchable: If True, a run that exits without a terminal state but with
+            a truthy ``probe_finished`` flag in its run slot is relaunched (up to
+            the project's ``max_run_relaunches``). Lets a scene run an iterative
+            probe across several short ``runSofa`` invocations. Leave False for
+            ordinary one-shot scenes.
         score_aggregation: How repeats are combined: ``"mean"``, ``"median"``,
             ``"min"``, ``"max"``, or ``"sum"``.
         default_selected: Whether the dashboard pre-selects this test.
@@ -122,6 +127,7 @@ class TestSpec:
     max_score: float = 1.0
     weight: float = 1.0
     gated: bool = False
+    relaunchable: bool = False
     score_aggregation: str = "mean"
     default_selected: bool = True
 
@@ -193,6 +199,10 @@ class SofaOptProject:
     """Optional: adjust sampled params before they are used/prepared (e.g.
     enforce a cross-parameter relationship). Does not change what the optimizer
     records — only the values written to params.json and passed to the hook."""
+    on_generation_end: Callable[[int, list], None] | None = None
+    """Optional: called after each generation finishes with
+    ``(gen_index, trial_state_paths)``. Use for cross-generation carryover
+    (e.g. seeding the next generation from this one's results)."""
 
     # --- optimizer settings (sane defaults) -------------------------------
     n_parallel: int = 5

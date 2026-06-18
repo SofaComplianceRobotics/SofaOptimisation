@@ -20,6 +20,7 @@ def build_cmaes_study(db_path: Path, cfg: RunConfig) -> optuna.Study:
 
     Deletes any existing database at ``db_path`` first.
     """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     if db_path.exists():
         db_path.unlink()
         print(f"[reset] Deleted {db_path.name}")
