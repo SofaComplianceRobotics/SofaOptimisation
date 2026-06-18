@@ -31,13 +31,28 @@ def _write_cube_obj(path: Path, size: float) -> None:
     """Write a minimal axis-aligned cube OBJ of edge ``size``, centered at origin."""
     h = size / 2.0
     verts = [
-        (-h, -h, -h), (h, -h, -h), (h, h, -h), (-h, h, -h),
-        (-h, -h, h), (h, -h, h), (h, h, h), (-h, h, h),
+        (-h, -h, -h),
+        (h, -h, -h),
+        (h, h, -h),
+        (-h, h, -h),
+        (-h, -h, h),
+        (h, -h, h),
+        (h, h, h),
+        (-h, h, h),
     ]
     faces = [  # 1-indexed triangles
-        (1, 2, 3), (1, 3, 4), (5, 8, 7), (5, 7, 6),
-        (1, 5, 6), (1, 6, 2), (2, 6, 7), (2, 7, 3),
-        (3, 7, 8), (3, 8, 4), (4, 8, 5), (4, 5, 1),
+        (1, 2, 3),
+        (1, 3, 4),
+        (5, 8, 7),
+        (5, 7, 6),
+        (1, 5, 6),
+        (1, 6, 2),
+        (2, 6, 7),
+        (2, 7, 3),
+        (3, 7, 8),
+        (3, 8, 4),
+        (4, 8, 5),
+        (4, 5, 1),
     ]
     lines = [f"v {x} {y} {z}" for x, y, z in verts]
     lines += [f"f {a} {b} {c}" for a, b, c in faces]
@@ -56,7 +71,9 @@ PROJECT = SofaOptProject(
     title="Cube drop — sofaopt demo",
     work_dir=HERE,
     params=[
-        ParamSpec("cube_size", "float", 5.0, 50.0, 10.0), #name, type, min, max, default
+        ParamSpec(
+            "cube_size", "float", 5.0, 50.0, 10.0
+        ),  # name, type, min, max, default
         ParamSpec("cube_mass", "float", 0.5, 50.0, 1.0),
     ],
     tests=[
@@ -70,11 +87,15 @@ PROJECT = SofaOptProject(
         )
     ],
     runsofa_exe=Path(os.environ.get("RUNSOFA_EXE", "runSofa")),
-    sofa_env={k: os.environ[k] for k in ("SOFA_ROOT", "SOFAPYTHON3_ROOT", "PYTHONPATH") if k in os.environ},
+    sofa_env={
+        k: os.environ[k]
+        for k in ("SOFA_ROOT", "SOFAPYTHON3_ROOT", "PYTHONPATH")
+        if k in os.environ
+    },
     gui_mode="batch",
     prepare_trial=_prepare,
     n_parallel=4,
-    n_generations=12,
+    n_generations=40,
     cmaes_startup_trials=8,
     sofa_realtime_timeout=60.0,
     run_script=HERE / "run.py",
