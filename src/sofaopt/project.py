@@ -109,11 +109,13 @@ class TestSpec:
         gated: If True, this test is only run once an *ungated* test has scored
             above zero for the trial — used to skip expensive tests on hopeless
             candidates. Pure quality-of-life; safe to leave False.
-        relaunchable: If True, a run that exits without a terminal state but with
-            a truthy ``probe_finished`` flag in its run slot is relaunched (up to
-            the project's ``max_run_relaunches``). Lets a scene run an iterative
-            probe across several short ``runSofa`` invocations. Leave False for
-            ordinary one-shot scenes.
+        relaunchable: If True, the scene may run an *iterative probe* across
+            several short ``runSofa`` launches, carrying state between them. The
+            scene drives this with ``trial.relaunch(carry={...})`` (go again) vs
+            ``trial.write_score(...)`` (done), and reads carried state back with
+            ``trial.load_carry()``. Relaunches are capped by the project's
+            ``max_run_relaunches`` (which must be > 0). Leave False for ordinary
+            one-shot scenes.
         score_aggregation: How repeats are combined: ``"mean"``, ``"median"``,
             ``"min"``, ``"max"``, or ``"sum"``.
         default_selected: Whether the dashboard pre-selects this test.

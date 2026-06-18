@@ -88,12 +88,58 @@ class Trial:
         """Mark this run pruned (not scored) and stop the simulation."""
         self._ensure_writer().write_pruned_and_stop(reason)
 
-    def mark_probe_finished(self) -> None:
-        """Signal a relaunchable test that this probe iteration completed.
+    # --- relaunchable probes (carry state across runSofa relaunches) ---------
+    @property
+    def trial_dir(self) -> Path | None:
+        """This trial's working directory (where carry/params files live)."""
+        return Path(self.trial_state_path).parent if self.trial_state_path else None
 
-        The optimizer relaunches the run (up to ``max_run_relaunches``) instead
-        of treating the non-terminal exit as a crash. Only meaningful for tests
-        declared with ``relaunchable=True``.
+    def _carry_path(self) -> Path | None:
+        d = self.trial_dir
+        return (d / f"carry_run{self.run_slot}.json") if d else None
+
+    def load_carry(self) -> dict:
+        """Read state saved by a previous relaunch of this run.
+
+        Each relaunch is a fresh process, so in-memory values are gone — carry
+        anything you need to the next launch via :meth:`save_carry` and read it
+        back here. Returns ``{}`` on the first launch (nothing saved yet).
+        """
+        p = self._carry_path()
+        if p and p.is_file():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+        return {}
+
+    def save_carry(self, data: dict) -> None:
+        """Persist state for the next relaunch of this run (see :meth:`load_carry`)."""
+        p = self._carry_path()
+        if p is not None:
+            p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def relaunch(self, carry: dict | None = None, status: dict | None = None) -> None:
+        """End this probe iteration and ask the optimizer to relaunch the run.
+
+        Persists ``carry`` (read it next launch with :meth:`load_carry`), flags
+        the run so the optimizer relaunches it instead of treating the exit as a
+        crash, and stops this process. Requires the test's ``relaunchable=True``
+        and the project's ``max_run_relaunches > 0``. Call :meth:`write_score`
+        instead to finish for good.
+        """
+        if carry is not None:
+            self.save_carry(carry)
+        payload = {"probe_finished": True}
+        if status:
+            payload.update(status)
+        self.write_status(payload)
+        self._ensure_writer()._stop()
+
+    def mark_probe_finished(self) -> None:
+        """Low-level: flag this run for relaunch without persisting carry/stopping.
+
+        Prefer :meth:`relaunch`, which also saves carry state and stops the run.
         """
         self._ensure_writer().write_status({"probe_finished": True})
 
@@ -264,7 +310,10 @@ class ScoreWriter:
                 self.rootnode.animate = False
             except Exception:
                 pass
-        os.kill(os.getpid(), 9)
+        # Only hard-kill under the optimizer; an interactive (hand-launched)
+        # run has no trial_state_path and should just pause, not exit.
+        if self.trial_state_path is not None:
+            os.kill(os.getpid(), 9)
 
     @property
     def finished(self) -> bool:
