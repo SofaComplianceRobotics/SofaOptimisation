@@ -209,7 +209,107 @@ cross-parameter relationships before use) and
 
 ---
 
-## 6. Run it
+## 6. Tuning the search (CMA-ES)
+
+How thoroughly and how fast the optimizer searches is controlled entirely by a
+few fields on `SofaOptProject`. You set them when you build the project:
+
+```python
+PROJECT = SofaOptProject(
+    ...,
+    n_parallel=6,             # population size  (also = concurrent runSofa procs)
+    n_generations=120,        # how many CMA-ES update steps
+    cmaes_startup_trials=24,  # random trials before CMA-ES takes over
+    cmaes_sigma0=0.3,         # initial search spread
+    max_active_sofa_procs=12, # hard cap on concurrent SOFA processes
+)
+```
+
+### The budget — how many simulations you're committing to
+
+```
+trials evaluated      = n_parallel × n_generations
+runSofa launches      = trials × Σ(run_count over selected tests)
+```
+
+So 6 × 120 = 720 candidates; if your one test has `run_count=3`, that's ~2160
+`runSofa` runs. Multiply by a typical scene's wall-time to estimate the run, and
+size `n_generations` to the time you actually have.
+
+### `n_parallel` — population size (λ)
+
+The number of candidates CMA-ES draws **per generation**, launched concurrently
+as separate `runSofa` processes. Two effects:
+
+- **Search quality:** CMA-ES estimates its next step from a whole population, so
+  bigger populations give a steadier, more robust update (better on noisy or
+  rugged landscapes) — at the cost of more simulations per generation.
+- **Parallelism:** it's also how many scenes run at once. Match it to the CPU
+  cores you can spare. Must be **≥ 4** (the framework enforces this — CMA-ES is
+  ill-defined below that).
+
+### `n_generations` — how long it refines
+
+The number of CMA-ES update steps. More generations = more refinement of the
+distribution toward good regions. This is your main "search longer" dial.
+
+### Where it starts — `x0` (your `ParamSpec` defaults)
+
+CMA-ES does **not** start from a random point: its initial mean is each
+parameter's `default`. So **set your defaults to your best-known / baseline
+design** and the search begins there and improves outward. Frozen params
+(`min == max`) are held fixed and excluded from the search.
+
+### `cmaes_startup_trials` — the random startup phase
+
+The **first `cmaes_startup_trials` completed trials are sampled uniformly at
+random** within each parameter's bounds; only afterwards does the CMA-ES
+algorithm take over. CMA-ES needs a handful of evaluated points before its
+covariance estimate means anything — this warm-up provides them.
+
+- It's effectively *"how many random trials first."* Because a generation is
+  `n_parallel` trials, setting it to `K × n_parallel` gives roughly **K fully
+  random generations** before CMA-ES engages.
+- **Rule of thumb:** at least one population (`≥ n_parallel`); a small multiple
+  (2–4×) for rugged or higher-dimensional problems. The framework default of
+  **50** suits a real project with many parameters; a 2-parameter toy is fine
+  with ~8.
+- Bigger = more upfront exploration (less likely to commit early to a poor
+  basin); smaller = converges sooner.
+
+### `cmaes_sigma0` — initial spread
+
+The initial standard deviation of the search distribution, in Optuna's
+internally-normalized parameter space (each range mapped to ~`[0, 1]`). So:
+
+- `1.0` (default) is **broad** — the first CMA-ES samples spread across most of
+  each parameter's range.
+- `0.2–0.3` starts **local**, clustered near your defaults (`x0`) — good when
+  you trust the baseline and want refinement rather than a global hunt.
+
+As the search proceeds CMA-ES adapts this spread automatically; `sigma0` only
+sets the starting width.
+
+### `max_active_sofa_procs` — concurrency safety cap
+
+Distinct from `n_parallel`: a single trial can launch several runs (multiple
+tests / repeats), so the number of *in-flight* SOFA processes can exceed the
+population. This caps the total concurrently, throttling new launches until
+others finish. Set it to roughly your core count (default 12).
+
+### Recipes
+
+- **Quick smoke test:** `n_parallel=4, n_generations=8, cmaes_startup_trials=8`.
+- **Real run:** `n_parallel=`cores-you-can-spare, `n_generations=100+`,
+  `cmaes_startup_trials=50`, `cmaes_sigma0=1.0`.
+- **Trust your baseline, want refinement:** keep defaults sharp, lower
+  `cmaes_sigma0` to ~`0.2` and `cmaes_startup_trials` to ~`n_parallel`.
+- **Rugged / many parameters:** raise `cmaes_startup_trials` and keep
+  `cmaes_sigma0` near `1.0` for wider exploration.
+
+---
+
+## 7. Run it
 
 Headless (`run.py`):
 
@@ -233,7 +333,7 @@ Artifacts land under `work_dir/runtime/` (`trials/gen_XXXX/trial_YY/…`,
 
 ---
 
-## 7. Checklist
+## 8. Checklist
 
 - [ ] `pip install -e sofaopt[dashboard]` into the interpreter SofaPython3 uses.
 - [ ] `runsofa_exe` + `sofa_env` point at one consistent SOFA build with SofaPython3.
@@ -245,7 +345,7 @@ Artifacts land under `work_dir/runtime/` (`trials/gen_XXXX/trial_YY/…`,
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 - **Scene exits immediately / plugin ABI errors** — `runsofa_exe`, `SOFA_ROOT`
   and the SofaPython3 site-packages are from different builds. Make them one build.
