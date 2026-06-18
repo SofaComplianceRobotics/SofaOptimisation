@@ -53,6 +53,29 @@ run_optimization(PROJECT)            # headless
 launch_dashboard(PROJECT, port=8050) # web UI
 ```
 
+## Optimizer settings
+
+The search is **CMA-ES** (via Optuna). A few fields on `SofaOptProject` control it:
+
+| Field | Default | What it does |
+|-------|---------|--------------|
+| `n_parallel` | 5 | CMA-ES population size — candidates per generation, run as parallel `runSofa` processes. |
+| `n_generations` | 100 | How many generations to run. |
+| `cmaes_startup_trials` | 50 | **Random startup phase** (see below). |
+| `cmaes_sigma0` | 1.0 | Initial spread (std-dev) of the search once CMA-ES begins. |
+
+**Random startup phase.** CMA-ES needs a few evaluated points before its model is
+meaningful, so the **first `cmaes_startup_trials` trials are sampled uniformly at
+random** within each parameter's bounds; only after that does the CMA-ES
+algorithm take over (sampling around an adapting mean). Raise it for more upfront
+exploration on rugged landscapes, lower it to converge sooner.
+
+Two related details:
+- **Starting point** — CMA-ES is *centered on each `ParamSpec`'s `default`*, not on
+  a random point. Frozen params (`min == max`) are excluded from the search.
+- Once CMA-ES is active it explores with spread `cmaes_sigma0` around that
+  evolving center.
+
 ## Examples
 
 A runnable example needing only a SOFA install with SofaPython3:
