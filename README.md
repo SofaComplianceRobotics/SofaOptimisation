@@ -60,11 +60,15 @@ run_optimization(PROJECT)            # headless
 launch_dashboard(PROJECT, port=8050) # web UI with Run/Stop
 ```
 
-## Example
+## Examples
 
-A minimal, runnable example lives in [`examples/box_drop/`](examples/box_drop/)
-— it optimizes a couple of parameters of a falling box and needs nothing but a
-SOFA install with SofaPython3. Start there.
+Two runnable examples, each needing only a SOFA install with SofaPython3:
+
+- [`examples/cantilever/`](examples/cantilever/) — tune a soft beam's material
+  to hit a target tip deflection. **No prepare hook** (parameter-only). Start here.
+- [`examples/cube_drop/`](examples/cube_drop/) — a rigged "does the optimizer
+  climb the hill?" demo: a cube falls and the optimizer learns to make it bigger
+  and heavier. Uses a **prepare hook** that generates a scaled cube mesh per trial.
 
 ## Porting guide
 
