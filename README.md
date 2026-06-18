@@ -62,13 +62,12 @@ launch_dashboard(PROJECT, port=8050) # web UI with Run/Stop
 
 ## Examples
 
-Two runnable examples, each needing only a SOFA install with SofaPython3:
+A runnable example needing only a SOFA install with SofaPython3:
 
-- [`examples/cantilever/`](examples/cantilever/) — tune a soft beam's material
-  to hit a target tip deflection. **No prepare hook** (parameter-only). Start here.
 - [`examples/cube_drop/`](examples/cube_drop/) — a rigged "does the optimizer
   climb the hill?" demo: a cube falls and the optimizer learns to make it bigger
-  and heavier. Uses a **prepare hook** that generates a scaled cube mesh per trial.
+  and heavier. Uses a **prepare hook** that generates a scaled cube mesh per
+  trial, so it exercises the full pipeline. Copy it as a starting template.
 
 ## Porting guide
 

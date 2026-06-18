@@ -12,8 +12,9 @@ work end to end:
 
 So you should watch the optimizer drive **both size and mass up**.
 
-Unlike the cantilever example, this one uses a **prepare hook**: each trial
-generates a scaled cube `.obj` (the "model"), demonstrating the geometry path.
+This one uses a **prepare hook**: each trial generates a scaled cube `.obj`
+(the "model"), demonstrating the geometry path. A project that only tunes scene
+quantities (stiffness, mass, gains) needs no hook — the scene just reads params.
 """
 
 from __future__ import annotations

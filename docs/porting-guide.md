@@ -27,8 +27,9 @@ So you implement **three things**:
 
 Everything else is provided.
 
-> The smallest complete example lives in [`examples/cantilever/`](../examples/cantilever).
-> Read it alongside this guide — it is ~40 lines of project + scene.
+> A complete, runnable example lives in [`examples/cube_drop/`](../examples/cube_drop).
+> Read it alongside this guide — it is a small project + scene that exercises the
+> whole pipeline (including the prepare hook).
 
 ---
 
@@ -196,7 +197,7 @@ PROJECT = SofaOptProject(..., prepare_trial=prepare)
 
 The scene then loads `trial.env["OPT_MESH"]`. Raise inside the hook to hard-fail
 a candidate (e.g. invalid geometry). Parameter-only projects (stiffness, mass,
-gains, …) need **no hook at all** — the cantilever example has none.
+gains, …) need **no hook at all** — just read `trial.params` in the scene.
 
 Other optional hooks: `constrain_params(params)->params` (enforce
 cross-parameter relationships before use) and

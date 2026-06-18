@@ -6,8 +6,8 @@ The optimum is obvious by construction, so a healthy optimizer should visibly
 drive **both size and mass up**.
 
 It also exercises the **prepare hook**: every trial generates a scaled cube
-`.obj` (the "model"), so this is the geometry-generating counterpart to the
-[cantilever example](../cantilever) (which has no hook).
+`.obj` (the "model"), so it covers the full pipeline including geometry
+generation. (A project that only tunes scene quantities needs no hook.)
 
 ## Why bigger + heavier wins
 
