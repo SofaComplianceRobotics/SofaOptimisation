@@ -9,13 +9,6 @@ sofaopt drives the hard, generic part of optimizing a SOFA simulation:
 - collects, normalizes, weights and **aggregates scores** across multiple tests,
 - shows **live progress, leaderboards and parameter bounds** in a web dashboard.
 
-It knows nothing about your robot, your geometry, or your SOFA install. You
-provide a small **project description** and your **scene files**; sofaopt does
-the rest.
-
-> Status: extracted from a gripper shape-optimization lab and generalized.
-> See the porting guide below.
-
 ---
 
 ## Install
@@ -57,17 +50,16 @@ from project import PROJECT
 
 run_optimization(PROJECT)            # headless
 # or
-launch_dashboard(PROJECT, port=8050) # web UI with Run/Stop
+launch_dashboard(PROJECT, port=8050) # web UI
 ```
 
 ## Examples
 
 A runnable example needing only a SOFA install with SofaPython3:
 
-- [`examples/cube_drop/`](examples/cube_drop/) — a rigged "does the optimizer
-  climb the hill?" demo: a cube falls and the optimizer learns to make it bigger
+- [`examples/cube_drop/`](examples/cube_drop/) — Demo: a cube falls and the optimizer learns to make it bigger
   and heavier. Uses a **prepare hook** that generates a scaled cube mesh per
-  trial, so it exercises the full pipeline. Copy it as a starting template.
+  trial, the optimiser is rewarded by having the cube touch the groun sooner, so is ensentivized to scale the cube and make it heavier
 
 ## Porting guide
 

@@ -56,7 +56,7 @@ PROJECT = SofaOptProject(
     title="Cube drop — sofaopt demo",
     work_dir=HERE,
     params=[
-        ParamSpec("cube_size", "float", 5.0, 50.0, 10.0),
+        ParamSpec("cube_size", "float", 5.0, 50.0, 10.0), #name, type, min, max, default
         ParamSpec("cube_mass", "float", 0.5, 50.0, 1.0),
     ],
     tests=[

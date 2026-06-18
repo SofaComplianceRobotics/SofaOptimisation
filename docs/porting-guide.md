@@ -4,7 +4,6 @@ This guide takes you from an existing SOFA scene to a fully optimized,
 dashboard-driven project. You bring the simulation and the score; sofaopt
 brings CMA-ES, parallel execution, aggregation, gating, and the web UI.
 
-It assumes nothing about your robot, your geometry, or your SOFA build.
 
 ---
 
@@ -14,8 +13,8 @@ The framework runs one loop:
 
 ```
 sample params ─▶ (optional) prepare hook ─▶ launch scene.py via runSofa
-                                                   │
-                  collect score from trial_state.json ◀─ scene writes score
+                                                                      │
+        collect score from trial_state.json ◀─ scene writes score  ◀─
 ```
 
 So you implement **three things**:
@@ -114,16 +113,19 @@ PROJECT = SofaOptProject(
     name="my_robot",
     work_dir=HERE,                      # runtime/ (trials, db, progress) goes here
     params=[
-        ParamSpec("stiffness", "float", 1e3, 1e6, 1e4),
+        ParamSpec("stiffness", "float", 1e3, 1e6, 1e4), #name, type, min, max, default
         ParamSpec("n_layers",  "int",   1,   6,   3),
-        ParamSpec("use_brace", "bool",  default=True),
+        ParamSpec("use_brace", "bool",  default=True),#name, type, default
     ],
+
     tests=[
         TestSpec("reach", scene_file=HERE / "scenes/reach.py",
                  max_score=100, weight=2, default_selected=True),
         TestSpec("hold",  scene_file=HERE / "scenes/hold.py",
                  max_score=100, weight=1, gated=True),
     ],
+    # add more tests with max_score=, weight=, gated=, run_count=, default_selected=
+
     runsofa_exe=Path(os.environ.get("RUNSOFA_EXE", "runSofa")),
     sofa_env={k: os.environ[k] for k in ("SOFA_ROOT",) if k in os.environ},
     n_parallel=5,
@@ -147,7 +149,7 @@ PROJECT = SofaOptProject(
   `score_aggregation` (`"mean"`, `"median"`, `"min"`, `"max"`, `"sum"`,
   `"exponential_coverage"`).
 - `max_score` normalizes the test to `[0,1]`; `weight` combines tests.
-- `gated=True`: only run this (often expensive) test once an *ungated* test has
+- `gated=True`: only run this test once an *ungated* test has
   scored above zero for the candidate.
 - `relaunchable=True`: advanced — a run that exits non-terminally but set
   `trial.mark_probe_finished()` is relaunched (up to `max_run_relaunches`), for
@@ -189,7 +191,6 @@ def prepare(params, trial_dir):
     return TrialPrep(
         env={"OPT_MESH": str(mesh)},    # injected into the scene process
         cleanup=[mesh],                 # deleted after the trial's runs finish
-        preview_image=mesh,             # optional: shown in the dashboard (.stl or .png)
     )
 
 PROJECT = SofaOptProject(..., prepare_trial=prepare)
