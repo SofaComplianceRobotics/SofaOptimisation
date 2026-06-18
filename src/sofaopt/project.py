@@ -34,12 +34,18 @@ from typing import Any, Callable, Literal, Mapping, Sequence
 
 ParamType = Literal["float", "int", "bool"]
 
-# A prepare hook receives the sampled params and the per-trial working
-# directory, does whatever project-specific preparation is needed (e.g. write
-# config + run a geometry generator), and returns a mapping of EXTRA environment
-# variables to inject into the scene subprocess (e.g. {"OPT_MESH": "/.../t.stl"}).
-# It may raise to mark the whole trial as a hard failure (e.g. invalid geometry).
-PrepareHook = Callable[[Mapping[str, Any], Path], Mapping[str, str]]
+# A prepare hook receives the sampled params and the per-trial working directory,
+# does whatever project-specific preparation is needed (e.g. write a config and
+# run a geometry generator), and returns a TrialPrep describing extra scene env,
+# files to clean up afterward, and an optional preview image. It may raise to
+# mark the whole trial as a hard failure (e.g. invalid geometry). Defined as a
+# string forward-ref because TrialPrep is declared below.
+PrepareHook = Callable[[Mapping[str, Any], Path], "TrialPrep"]
+
+# A constrain hook receives the freshly sampled params and returns the values
+# actually used (e.g. enforce a cross-parameter relationship). The values
+# recorded by the optimizer are unchanged; only the used values differ.
+ConstrainHook = Callable[[dict], dict]
 
 
 @dataclass(frozen=True)
@@ -131,6 +137,25 @@ class TestSpec:
         return self.label
 
 
+@dataclass
+class TrialPrep:
+    """What a :data:`PrepareHook` returns for one trial.
+
+    Args:
+        env: Extra environment variables injected into the scene subprocess
+            (e.g. ``{"OPT_MESH": "/.../trial.stl"}``). Values are stringified.
+        cleanup: Files to delete once the trial's runs have all finished
+            (e.g. the per-trial mesh).
+        preview_image: Optional image to show in the dashboard for this trial.
+            Either a ready PNG, or an ``.stl`` to be rendered (needs the
+            ``preview`` extra).
+    """
+
+    env: dict[str, str] = field(default_factory=dict)
+    cleanup: list[Path] = field(default_factory=list)
+    preview_image: Path | None = None
+
+
 @dataclass(frozen=True)
 class SofaOptProject:
     """Everything the framework needs to optimize one project.
@@ -159,9 +184,15 @@ class SofaOptProject:
     over a copy of the current environment."""
     gui_mode: str = "batch"
     """``"batch"`` for headless optimization; ``"qt"``/``"qglviewer"`` to watch."""
+    float_step: float | None = None
+    """Optional quantization step for float parameter sampling (None = continuous)."""
 
     # --- optional per-trial preparation (e.g. geometry generation) ---------
     prepare_trial: PrepareHook | None = None
+    constrain_params: ConstrainHook | None = None
+    """Optional: adjust sampled params before they are used/prepared (e.g.
+    enforce a cross-parameter relationship). Does not change what the optimizer
+    records — only the values written to params.json and passed to the hook."""
 
     # --- optimizer settings (sane defaults) -------------------------------
     n_parallel: int = 5
