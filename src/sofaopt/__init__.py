@@ -39,12 +39,14 @@ from .project import (
     PrepareHook,
     SofaOptProject,
     TestSpec,
+    TrialPrep,
     param_specs_from_dataclass,
 )
 
 __all__ = [
     "ParamSpec",
     "TestSpec",
+    "TrialPrep",
     "PrepareHook",
     "SofaOptProject",
     "param_specs_from_dataclass",
