@@ -22,7 +22,7 @@ pip install -e .[preview]   # + STL preview rendering (shape projects)
 sofaopt does **not** depend on SOFA as a Python package. It launches whatever
 `runSofa` you point it at, so any build with the `SofaPython3` plugin works.
 
-## The contract (everything you implement)
+## The contract
 
 You write one `project.py` and one or more `scene.py` files.
 
