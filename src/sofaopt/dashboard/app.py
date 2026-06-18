@@ -124,6 +124,11 @@ def launch_dashboard(
     project: SofaOptProject, port: int = 8050, open_browser: bool = True
 ) -> None:
     """Start the dashboard web server for ``project``."""
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     print(f"[info] Starting {project.title or project.name} on http://localhost:{port}")
     os.environ["WERKZEUG_RUN_MAIN"] = "false"
     os.environ.pop("WERKZEUG_SERVER_FD", None)

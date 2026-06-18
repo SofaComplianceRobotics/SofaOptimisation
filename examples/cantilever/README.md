@@ -25,14 +25,24 @@ tests + SOFA paths) and `scene.py` (your simulation + score).
 pip install -e /c/dev/sofaopt[dashboard]   # the framework
 ```
 
-Point sofaopt at your SOFA build (any build with SofaPython3):
+Point sofaopt at your SOFA build (any build with SofaPython3).
+
+**PowerShell** (Windows default shell — use `$env:`, not `export`):
+
+```powershell
+$env:SOFA_ROOT   = "C:/path/to/sofa"
+$env:RUNSOFA_EXE = "$env:SOFA_ROOT/bin/runSofa.exe"
+```
+
+**Git Bash / Linux / macOS:**
 
 ```bash
-export RUNSOFA_EXE="C:/path/to/runSofa.exe"
-export SOFA_ROOT="C:/path/to/sofa"
-# PYTHONPATH must let the scene import sofaopt; with an editable install it
-# already can. If you use an isolated SOFA python, add sofaopt to PYTHONPATH.
+export SOFA_ROOT="/path/to/sofa"
+export RUNSOFA_EXE="$SOFA_ROOT/bin/runSofa.exe"
 ```
+
+The scene must be able to `import sofaopt`; with an editable install into the
+same Python SofaPython3 uses, it already can.
 
 ## Run
 

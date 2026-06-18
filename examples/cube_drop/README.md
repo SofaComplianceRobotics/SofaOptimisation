@@ -20,15 +20,28 @@ Score = how early the bottom face crosses `y = 0` (earlier → higher).
 
 ## Run
 
-```bash
-pip install -e /c/dev/sofaopt[dashboard]
-export RUNSOFA_EXE="C:/path/to/runSofa.exe"   # any build with SofaPython3
-export SOFA_ROOT="C:/path/to/sofa"
+Install once: `pip install -e C:/dev/sofaopt[dashboard]`, then point at your SOFA.
 
-python run.py            # headless — watch best size/mass climb each generation
-python dashboard.py      # or the web UI at http://localhost:8050
-runSofa -l SofaPython3 -g qt scene.py   # watch one cube fall (uses param defaults)
+**PowerShell** (Windows default shell — use `$env:`, not `export`):
+
+```powershell
+$env:SOFA_ROOT   = "C:/path/to/sofa"           # any build with SofaPython3
+$env:RUNSOFA_EXE = "$env:SOFA_ROOT/bin/runSofa.exe"
+
+python run.py        # headless - watch best size/mass climb each generation
+python dashboard.py  # or the web UI at http://localhost:8050
 ```
+
+**Git Bash / Linux / macOS:**
+
+```bash
+export SOFA_ROOT="/path/to/sofa"
+export RUNSOFA_EXE="$SOFA_ROOT/bin/runSofa.exe"
+python run.py
+```
+
+Watch one cube fall interactively (uses param defaults):
+`runSofa -l SofaPython3 -g qt scene.py`
 
 In the headless log, the best trial's `params` should trend toward
 `cube_size ≈ 50` and `cube_mass ≈ 50` (the range maxima) within a few
