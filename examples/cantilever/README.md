@@ -55,7 +55,7 @@ python run.py
 Watch one scene interactively (no optimizer — falls back to defaults):
 
 ```bash
-runSofa -l SofaPython3 -g qt scene.py
+runSofa -l SofaPython3 -g imgui scene.py
 ```
 
 Dashboard (select tests/weights, Run/Stop, live progress + leaderboard):

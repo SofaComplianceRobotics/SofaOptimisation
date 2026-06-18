@@ -189,7 +189,8 @@ class SofaOptProject:
     ``PYTHONPATH`` so the scene can import your modules and sofaopt). Merged
     over a copy of the current environment."""
     gui_mode: str = "batch"
-    """``"batch"`` for headless optimization; ``"qt"``/``"qglviewer"`` to watch."""
+    """``"batch"`` for headless optimization; ``"imgui"``/``"glfw"`` to watch
+    (interactive GUI names vary by SOFA build — check ``runSofa --help``)."""
     float_step: float | None = None
     """Optional quantization step for float parameter sampling (None = continuous)."""
 

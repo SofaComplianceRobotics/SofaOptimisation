@@ -236,7 +236,7 @@ Artifacts land under `work_dir/runtime/` (`trials/gen_XXXX/trial_YY/…`,
 - [ ] `params` and `tests` declared; `max_score`/`weight` set per test.
 - [ ] Shape project only: `prepare_trial` writes the asset + returns its env.
 - [ ] `run_script` set so the dashboard can Run.
-- [ ] Sanity-check a single scene first: `runSofa -l SofaPython3 -g qt scenes/reach.py`.
+- [ ] Sanity-check a single scene first: `runSofa -l SofaPython3 -g imgui scenes/reach.py`.
 
 ---
 

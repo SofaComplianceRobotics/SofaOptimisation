@@ -41,7 +41,7 @@ python run.py
 ```
 
 Watch one cube fall interactively (uses param defaults):
-`runSofa -l SofaPython3 -g qt scene.py`
+`runSofa -l SofaPython3 -g imgui scene.py`
 
 In the headless log, the best trial's `params` should trend toward
 `cube_size ≈ 50` and `cube_mass ≈ 50` (the range maxima) within a few

@@ -80,7 +80,7 @@ def stop_optimize() -> str:
     return _stop_proc("optimize")
 
 
-def launch_scene(scene_file: Path, extra_env: dict | None = None, gui: str = "qt") -> str:
+def launch_scene(scene_file: Path, extra_env: dict | None = None, gui: str = "imgui") -> str:
     """Launch one scene in an interactive ``runSofa`` window for viewing."""
     project = context.project()
     runsofa = str(project.runsofa_exe)
