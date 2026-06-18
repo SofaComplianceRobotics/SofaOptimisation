@@ -99,7 +99,7 @@ def write_gen_summary(gen_dir: Path, gen_index: int, scores: list[float]) -> Non
         f"{summary['best_score']:.2f}" if summary["best_score"] is not None else "n/a"
     )
     print(
-        f"[summary] Gen {gen_index:04d} — "
+        f"[summary] Gen {gen_index:04d} - "
         f"avg: {avg_str}/100  best: {best_str}/100  "
         f"({len(valid_scores)}/{len(scores)} trials)"
     )

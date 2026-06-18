@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 
 from sofaopt.core.algorithm import build_cmaes_study
@@ -27,6 +28,14 @@ def run_optimization(
     if cfg is None:
         cfg = RunConfig.from_env(project)
 
+    # Windows consoles default to cp1252; make sure framework logging (and any
+    # non-ASCII in scene output) never crashes the run on an encode error.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     reset_trials_dir(project.trials_dir, project.previews_dir)
 
     study = build_cmaes_study(project.db_path, cfg)
@@ -46,7 +55,7 @@ def run_optimization(
 
         try:
             best = study.best_trial
-            print(f"[best so far] Trial {best.number} → {best.value:.2f}/100")
+            print(f"[best so far] Trial {best.number} -> {best.value:.2f}/100")
         except ValueError:
             print("[best so far] No valid trials yet.")
 
@@ -57,4 +66,4 @@ def run_optimization(
         print(f"Best value:  {best_trial.value:.4f}/100")
         print(f"Best params: {best_trial.params}")
     except ValueError:
-        print("No valid trials found — all simulations failed.")
+        print("No valid trials found - all simulations failed.")

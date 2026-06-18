@@ -87,7 +87,7 @@ def _finalize_trial_score(
                 "outcome": trial_state.get("outcome", "pruned"),
             },
         )
-        print(f"[score] trial_{trial_index:02d} → pruned (generation pruned)")
+        print(f"[score] trial_{trial_index:02d} -> pruned (generation pruned)")
         return float("-inf")
 
     # Group scores by the test name each slot recorded for itself, so attribution
@@ -107,7 +107,7 @@ def _finalize_trial_score(
     if not valid_scores:
         final_score = hard_fail
         study.tell(trial, final_score)
-        print(f"[score] trial_{trial_index:02d} → {final_score:.2f} (all runs failed)")
+        print(f"[score] trial_{trial_index:02d} -> {final_score:.2f} (all runs failed)")
         update_trial_summary(
             trial_state_path,
             {"state": "failed", "final_score": final_score, "outcome": "all runs failed"},
@@ -220,7 +220,7 @@ def _finalize_trial_score(
     update_trial_summary(trial_state_path, trial_stats)
 
     print(
-        f"\n[score] trial_{trial_index:02d} → {final_score:.2f}/100 "
+        f"\n[score] trial_{trial_index:02d} -> {final_score:.2f}/100 "
         f"(weighted_normalized_agg: {aggregate_score:.2f}, gate={'open' if gate_open else 'closed'})"
     )
     return final_score
