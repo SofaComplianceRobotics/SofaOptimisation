@@ -28,8 +28,8 @@ preview = ["pyvista>=0.40"]
 dev = ["pytest>=7.0"]
 
 [project.urls]
-Homepage = "https://github.com/SofaComplianceRobotics/sofaopt"
-Repository = "https://github.com/SofaComplianceRobotics/sofaopt"
+Homepage = "https://github.com/SofaComplianceRobotics/SofaOptimisation"
+Repository = "https://github.com/SofaComplianceRobotics/SofaOptimisation"
 
 [tool.setuptools.packages.find]
 where = ["src"]
