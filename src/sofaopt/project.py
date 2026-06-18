@@ -216,6 +216,17 @@ class SofaOptProject:
     prepare_timeout: float = 60.0
     stl_delete_delay: float = 30.0
 
+    # --- dashboard wiring (optional) --------------------------------------
+    run_script: Path | None = None
+    """Script the dashboard's Run button executes to start a headless
+    optimization (typically a one-liner calling ``run_optimization(PROJECT)``).
+    If None, the dashboard runs read-only (no Run/Stop)."""
+    config_file: Path | None = None
+    """Optional text/JSON config file to expose in the dashboard's Config tab.
+    If None, the Config tab is hidden."""
+    title: str = ""
+    """Dashboard title. Defaults to ``name`` when empty."""
+
     # --- optional shape-opt extras ----------------------------------------
     failed_preview_image: Path | None = None
     """Placeholder image shown in the dashboard for trials whose prepare hook
