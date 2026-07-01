@@ -137,6 +137,7 @@ def load_all_trials() -> list[dict]:
                     "trial_name": trial_dir.name,
                     "score": score,
                     "final_score": final_score,
+                    "state": trial_level_state,
                     "failed": failed,
                     "fail_reason": fail_reason,
                     "outcome_reason": fail_reason,
@@ -144,6 +145,8 @@ def load_all_trials() -> list[dict]:
                     "run_scores": valid,
                     "all_run_scores": run_scores,
                     "test_scores": test_scores,
+                    "objective_values": trial_state.get("objective_values"),
+                    "params": trial_state.get("params") or {},
                     "is_complete": is_complete,
                     "chron": chron,
                 }

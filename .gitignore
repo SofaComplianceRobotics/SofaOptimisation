@@ -12,6 +12,7 @@ venv/
 runtime/
 *.db
 *.db-journal
+*.mp4
 
 # OS / editor
 .DS_Store

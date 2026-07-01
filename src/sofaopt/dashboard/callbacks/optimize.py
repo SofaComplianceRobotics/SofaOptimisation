@@ -173,9 +173,17 @@ def register_optimise_callbacks(app) -> None:
         State({"type": "gate-check", "test": ALL}, "value"),
         State({"type": "gate-check", "test": ALL}, "id"),
         State("opt-weights-store", "data"),
+        State("opt-sampler", "value"),
+        State("opt-seed-sampler", "value"),
+        State("opt-cmaes-margin", "value"),
+        State("opt-n-parallel", "value"),
+        State("opt-n-generations", "value"),
         prevent_initial_call=True,
     )
-    def handle_optimise(_, __, check_vals, check_ids, gate_vals, gate_ids, store):
+    def handle_optimise(
+        _, __, check_vals, check_ids, gate_vals, gate_ids, store,
+        sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
+    ):
         if ctx.triggered_id == "opt-stop-btn":
             return stop_optimize()
 
@@ -200,12 +208,25 @@ def register_optimise_callbacks(app) -> None:
         total = sum(test_weights.values())
         if total != 100:
             return f"Weights must sum to 100% (currently {total}%)."
+        if sampler == "cmaes" and int(n_parallel or 0) < 4:
+            return "CMA-ES needs Parallel >= 4. Lower it only with a different sampler."
 
         env = os.environ.copy()
         env[envkeys.SELECTED_TESTS] = ",".join(test_names)
         env[envkeys.TEST_WEIGHTS] = json.dumps(test_weights)
         if gated_names:
             env[envkeys.GATED_TESTS] = ",".join(gated_names)
+
+        # Optimizer-setting overrides → honored by run_optimization before build_study.
+        if sampler:
+            env[envkeys.SAMPLER] = str(sampler)
+        if seed_sampler:
+            env[envkeys.SEED_SAMPLER] = str(seed_sampler)
+        env[envkeys.CMAES_MARGIN] = "1" if (cmaes_margin and "margin" in cmaes_margin) else "0"
+        if n_parallel:
+            env[envkeys.N_PARALLEL] = str(int(n_parallel))
+        if n_generations:
+            env[envkeys.N_GENERATIONS] = str(int(n_generations))
         return start_optimize(env)
 
     @app.callback(

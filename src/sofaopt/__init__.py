@@ -52,6 +52,11 @@ __all__ = [
     "param_specs_from_dataclass",
     "run_optimization",
     "launch_dashboard",
+    "run_sensitivity_analysis",
+    "generate_trial_video",
+    "generate_selected_videos",
+    "generate_summary_video",
+    "cleanup_trial_recordings",
 ]
 
 __version__ = "0.1.0"
@@ -67,4 +72,24 @@ def __getattr__(name: str):
         from .dashboard.app import launch_dashboard
 
         return launch_dashboard
+    if name == "run_sensitivity_analysis":
+        from .sensitivity import run_sensitivity_analysis
+
+        return run_sensitivity_analysis
+    if name == "generate_trial_video":
+        from .video import generate_trial_video
+
+        return generate_trial_video
+    if name == "generate_selected_videos":
+        from .video import generate_selected_videos
+
+        return generate_selected_videos
+    if name == "generate_summary_video":
+        from .video import generate_summary_video
+
+        return generate_summary_video
+    if name == "cleanup_trial_recordings":
+        from .video import cleanup_trial_recordings
+
+        return cleanup_trial_recordings
     raise AttributeError(f"module 'sofaopt' has no attribute {name!r}")

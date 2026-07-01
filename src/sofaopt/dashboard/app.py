@@ -20,14 +20,19 @@ except ImportError as exc:  # pragma: no cover
 from sofaopt.dashboard import context
 from sofaopt.dashboard.callbacks import (
     register_config_callbacks,
+    register_interactions_callbacks,
     register_monitoring_callbacks,
     register_optimise_callbacks,
+    register_pareto_callbacks,
     register_scene_callbacks,
+    register_video_callbacks,
 )
 from sofaopt.dashboard.ui.tabs import (
     build_config_tab,
+    build_interactions_tab,
     build_optimise_tab,
     build_param_bounds_tab,
+    build_pareto_tab,
     build_performance_tab,
     build_progress_tab,
     build_scenes_tab,
@@ -76,6 +81,11 @@ def create_app(project: SofaOptProject) -> Dash:
         ("Progress", "progress", build_progress_tab()),
         ("Parameter Bounds", "bounds", build_param_bounds_tab()),
     ]
+    # Interaction analysis needs a scalar objective; skip in Pareto mode.
+    if not project.multi_objective:
+        tab_defs.append(("Importance / Interactions", "interactions", build_interactions_tab()))
+    if project.multi_objective:
+        tab_defs.append(("Pareto Front", "pareto", build_pareto_tab()))
     default_tab = tab_defs[0][1]
 
     app.layout = html.Div(
@@ -117,7 +127,32 @@ def create_app(project: SofaOptProject) -> Dash:
     register_scene_callbacks(app, catalog)
     register_optimise_callbacks(app)
     register_monitoring_callbacks(app)
+    register_video_callbacks(app)
+    if not project.multi_objective:
+        register_interactions_callbacks(app)
+    if project.multi_objective:
+        register_pareto_callbacks(app)
+    _register_video_routes(app, project)
     return app
+
+
+def _register_video_routes(app, project) -> None:
+    """Serve trial recordings and generated videos over HTTP so the browser can play them."""
+    from flask import send_from_directory
+
+    @app.server.route("/trial-video/<gen_name>/<trial_name>")
+    def serve_trial_video(gen_name, trial_name):
+        trial_dir = project.trials_dir / gen_name / trial_name
+        return send_from_directory(str(trial_dir), "trial.mp4")
+
+    @app.server.route("/runtime-video/<filename>")
+    def serve_runtime_video(filename):
+        video_dir = project.runtime_dir / "videos"
+        return send_from_directory(str(video_dir), filename)
+
+    @app.server.route("/runtime-summary")
+    def serve_runtime_summary():
+        return send_from_directory(str(project.runtime_dir), "summary.mp4")
 
 
 def launch_dashboard(

@@ -106,7 +106,7 @@ def launch_generation_trials(
     """Prepare and launch every trial of one generation."""
     project = cfg.project
     hard_fail = project.hard_fail_score
-    gated = set(cfg.gated_test_names)
+    gated = set() if project.multi_objective else set(cfg.gated_test_names)
     run_plan = cfg.run_plan
     max_active = project.max_active_sofa_procs
 
@@ -201,7 +201,10 @@ def launch_generation_trials(
                     r + 1,
                     {"state": "failed", "score": None, "reason": str(e)},
                 )
-            study.tell(trial, hard_fail)
+            if project.multi_objective:
+                study.tell(trial, [hard_fail] * len(cfg.selected_tests))
+            else:
+                study.tell(trial, hard_fail)
             update_trial_summary(
                 trial_state_path,
                 {

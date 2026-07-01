@@ -15,35 +15,80 @@ from sofaopt.core.trial_state import (
 )
 
 
-def build_cmaes_study(db_path: Path, cfg: RunConfig) -> optuna.Study:
-    """Create a fresh Optuna CMA-ES study backed by a SQLite database.
+def _seed_sampler(project) -> optuna.samplers.BaseSampler:
+    """Initial-design sampler for the startup/independent phase.
 
-    Deletes any existing database at ``db_path`` first.
+    ``"sobol"`` → a scrambled Sobol' (QMC) space-filling design; otherwise a
+    plain random sampler (the historical default).
+    """
+    if project.seed_sampler == "sobol":
+        # Fixed seed → reproducible (scrambled) Sobol' design; a single sampler
+        # instance drives all asks, so the parallel-seed caveat does not apply.
+        return optuna.samplers.QMCSampler(qmc_type="sobol", scramble=True, seed=1234)
+    return optuna.samplers.RandomSampler()
+
+
+def build_study(db_path: Path, cfg: RunConfig, resume: bool = False) -> optuna.Study:
+    """Create (or resume) an Optuna study backed by a SQLite database.
+
+    Supports CMA-ES (optionally with Margin), GP-BO, TPE, Random
+    (single-objective) and NSGA-II (multi-objective). The startup/independent
+    phase of CMA-ES and GP can be a space-filling Sobol' design
+    (``project.seed_sampler == "sobol"``).
+
+    When ``resume`` is True an existing database at ``db_path`` is **loaded**
+    (prior trials are kept; CMA-ES state persists in storage). When False, any
+    existing database is deleted so the run starts fresh.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    if db_path.exists():
+    if db_path.exists() and not resume:
         db_path.unlink()
         print(f"[reset] Deleted {db_path.name}")
 
     project = cfg.project
-    sampler = optuna.samplers.CmaEsSampler(
-        popsize=project.n_parallel,
-        sigma0=project.cmaes_sigma0,
-        n_startup_trials=project.cmaes_startup_trials,
-        consider_pruned_trials=True,
-        x0={
-            spec["name"]: spec["default"]
-            for spec in cfg.param_specs
-            if not (spec["min"] == 0 and spec["max"] == 0)
-        },
-    )
     storage = optuna.storages.RDBStorage(f"sqlite:///{db_path}")
+
+    if project.multi_objective:
+        directions = [t.direction for t in cfg.selected_tests]
+        sampler = optuna.samplers.NSGAIISampler(population_size=project.n_parallel)
+        return optuna.create_study(
+            study_name=project.name,
+            sampler=sampler,
+            directions=directions,
+            storage=storage,
+            load_if_exists=resume,
+        )
+
+    if project.sampler == "cmaes":
+        sampler = optuna.samplers.CmaEsSampler(
+            popsize=project.n_parallel,
+            n_startup_trials=project.cmaes_startup_trials,
+            consider_pruned_trials=True,
+            with_margin=project.cmaes_with_margin,
+            independent_sampler=_seed_sampler(project),
+        )
+    elif project.sampler == "gp":
+        sampler = optuna.samplers.GPSampler(
+            n_startup_trials=project.cmaes_startup_trials,
+            independent_sampler=_seed_sampler(project),
+        )
+    elif project.sampler == "tpe":
+        sampler = optuna.samplers.TPESampler()
+    else:
+        sampler = optuna.samplers.RandomSampler()
+
     return optuna.create_study(
         study_name=project.name,
         sampler=sampler,
         direction="maximize",
         storage=storage,
+        load_if_exists=resume,
     )
+
+
+def build_cmaes_study(db_path: Path, cfg: RunConfig, resume: bool = False) -> optuna.Study:
+    """Deprecated alias for :func:`build_study`. Use ``build_study`` instead."""
+    return build_study(db_path, cfg, resume=resume)
 
 
 def _finalize_trial_score(
@@ -106,7 +151,10 @@ def _finalize_trial_score(
     valid_scores = [s for s in run_scores if s != float("-inf")]
     if not valid_scores:
         final_score = hard_fail
-        study.tell(trial, final_score)
+        if cfg.project.multi_objective:
+            study.tell(trial, [hard_fail] * len(cfg.selected_tests))
+        else:
+            study.tell(trial, final_score)
         print(f"[score] trial_{trial_index:02d} -> {final_score:.2f} (all runs failed)")
         update_trial_summary(
             trial_state_path,
@@ -149,7 +197,10 @@ def _finalize_trial_score(
 
     if not per_test_scores:
         final_score = hard_fail
-        study.tell(trial, final_score)
+        if cfg.project.multi_objective:
+            study.tell(trial, [hard_fail] * len(cfg.selected_tests))
+        else:
+            study.tell(trial, final_score)
         update_trial_summary(
             trial_state_path,
             {
@@ -159,6 +210,32 @@ def _finalize_trial_score(
             },
         )
         return final_score
+
+    # --- multi-objective: each test is one Pareto objective -------------------
+    if cfg.project.multi_objective:
+        objective_values = [
+            per_test_details[t.name]["aggregate_score"]
+            if t.name in per_test_details
+            else hard_fail
+            for t in cfg.selected_tests
+        ]
+        study.tell(trial, objective_values)
+        trial_stats = {
+            "trial": trial_index,
+            "gen": gen_index,
+            "state": "done",
+            "n_runs": len(valid_scores),
+            "test_names": list(test_names),
+            "test_scores": per_test_details,
+            "objective_values": [round(v, 4) for v in objective_values],
+            "run_scores": [round(s, 4) if s != float("-inf") else None for s in run_scores],
+        }
+        update_trial_summary(trial_state_path, trial_stats)
+        print(
+            f"\n[score] trial_{trial_index:02d} -> "
+            f"objectives={[round(v, 4) for v in objective_values]}"
+        )
+        return objective_values[0] if objective_values else hard_fail
 
     configured_gated_names = [name for name in test_names if name in gated_names_cfg]
     gated_names = [name for name in test_names_in_order if name in gated_names_cfg]

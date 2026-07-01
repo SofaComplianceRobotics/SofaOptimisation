@@ -8,8 +8,10 @@ never outlive the optimizer.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -138,10 +140,39 @@ def launch_sofa(
     trial_env[envkeys.TEST_RUN_INDEX] = str(test_run_index)
     trial_env[envkeys.TEST_RUN_TOTAL] = str(test_run_total)
 
-    cmd = [str(project.runsofa_exe)]
-    for plugin in project.sofa_plugins:
-        cmd += ["-l", plugin]
-    cmd += ["-g", project.gui_mode, str(scene_file)]
+    if project.runner == "python":
+        runner_script = Path(__file__).parent.parent / "scene" / "runner.py"
+        trial_env["OPT_SOFA_PLUGINS"] = json.dumps(list(project.sofa_plugins))
+        # SofaPython3 puts its Python bindings under <root>/lib/python3/site-packages.
+        # When runner=="python" the subprocess is a plain Python interpreter (not
+        # runSofa's bundled Python), so we must ensure those bindings are reachable.
+        sofa_py3_root = trial_env.get("SOFAPYTHON3_ROOT", "")
+        if sofa_py3_root:
+            sp3_site = str(Path(sofa_py3_root) / "lib" / "python3" / "site-packages")
+            existing = trial_env.get("PYTHONPATH", "")
+            if sp3_site not in existing.split(os.pathsep):
+                trial_env["PYTHONPATH"] = (
+                    sp3_site + (os.pathsep + existing if existing else "")
+                )
+        if project.record_frames:
+            trial_dir = trial_state_path.parent
+            w, h = project.record_frame_size
+            trial_env["OPT_RECORD_FRAMES"] = "1"
+            trial_env["OPT_RECORD_OUTPUT"] = str(trial_dir / "trial.mp4")
+            trial_env["OPT_RECORD_FRAME_SKIP"] = str(project.record_frame_skip)
+            trial_env["OPT_RECORD_WIDTH"] = str(w)
+            trial_env["OPT_RECORD_HEIGHT"] = str(h)
+        cmd = [sys.executable, str(runner_script), str(scene_file)]
+    else:
+        if project.runsofa_exe is None:
+            raise ValueError(
+                "project.runsofa_exe is not set. "
+                "Either pass runsofa_exe=Path(...) or use runner='python'."
+            )
+        cmd = [str(project.runsofa_exe)]
+        for plugin in project.sofa_plugins:
+            cmd += ["-l", plugin]
+        cmd += ["-g", project.gui_mode, str(scene_file)]
 
     creation_flags = 0
     if os.name == "nt":

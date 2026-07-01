@@ -76,6 +76,46 @@ Two related details:
 - Once CMA-ES is active it explores with spread `cmaes_sigma0` around that
   evolving center.
 
+## Trial recording (Python runner)
+
+When using `runner="python"`, set `record_frames=True` to capture a video of every trial:
+
+```python
+PROJECT = SofaOptProject(
+    ...
+    runner="python",
+    record_frames=True,
+    record_frame_skip=16,       # capture every 16th step (default)
+    record_frame_size=(640, 480),
+    record_keep_top_n=15,       # keep recordings for 15 best trials
+    record_keep_bottom_n=5,     # keep recordings for 5 worst trials
+    record_prune_every_n=20,    # prune every 20 completed trials (mid-run)
+)
+```
+
+Each trial writes a `trial.mp4` to its directory. After each generation the framework
+burns gen/trial/score/params text into the video via ffmpeg. Excess recordings are pruned
+mid-run (every `record_prune_every_n` completed trials) to keep disk usage bounded.
+At the end of the run a summary video is generated from the top+bottom trials.
+
+## Dashboard
+
+```python
+launch_dashboard(PROJECT, port=8050)
+```
+
+The web UI provides:
+
+- **Performance graph** — score over trials, click any point to select it
+- **"Test it" button** — click a trial in the graph then press "Test it" to launch
+  `runSofa` with that trial's params in the SOFA GUI (loads `SofaImGui` automatically).
+  Useful for visually inspecting how a candidate behaves.
+- **"View recording" link** — if the trial has a recorded `trial.mp4`, a direct link
+  appears next to the "Test it" button.
+- **"Generate Summary" button** — concatenates the top+bottom trial recordings into a
+  single summary MP4.
+- **Live leaderboard, progress, parameter bounds, and Pareto front** tabs.
+
 ## Examples
 
 A runnable example needing only a SOFA install with SofaPython3:

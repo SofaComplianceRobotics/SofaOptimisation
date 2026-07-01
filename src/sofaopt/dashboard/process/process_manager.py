@@ -83,6 +83,8 @@ def stop_optimize() -> str:
 def launch_scene(scene_file: Path, extra_env: dict | None = None, gui: str = "imgui") -> str:
     """Launch one scene in an interactive ``runSofa`` window for viewing."""
     project = context.project()
+    if project.runsofa_exe is None:
+        return "runSofa not configured (set RUNSOFA_EXE or add runsofa_exe to the project)."
     runsofa = str(project.runsofa_exe)
     if not os.path.isfile(runsofa):
         return f"runSofa not found at: {runsofa}"

@@ -17,6 +17,7 @@ keywords = ["sofa", "optimization", "cma-es", "optuna", "simulation"]
 # SofaPython3 works, configured via the project's runsofa_exe / sofa_env.
 dependencies = [
     "optuna>=3.0",
+    "cmaes>=0.10",
     "numpy>=1.21",
 ]
 

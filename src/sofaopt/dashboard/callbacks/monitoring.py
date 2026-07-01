@@ -1,4 +1,4 @@
-"""Callbacks for the Performance, Progress and Bounds tabs."""
+"""Callbacks for the Performance, Progress, Bounds and Pareto tabs."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from sofaopt.dashboard.data.cache import (
     _read_json,
 )
 from sofaopt.dashboard.plotting.bounds import _build_param_bounds_graph
+from sofaopt.dashboard.plotting.pareto import build_pareto_layout
 from sofaopt.dashboard.plotting.performance import (
     _build_leaderboard_html,
     _build_performance_graph,
@@ -22,6 +23,22 @@ from sofaopt.dashboard.ui.progress import (
     _build_trial_detail,
     _find_earliest_not_done,
 )
+
+
+def register_pareto_callbacks(app) -> None:
+    """Register Pareto front tab callback (only wired when multi_objective=True)."""
+
+    @app.callback(
+        Output("pareto-graphs", "children"),
+        Input("pareto-interval", "n_intervals"),
+    )
+    def update_pareto(_):
+        project = context.project()
+        test_names = [t.name for t in project.tests]
+        directions = [t.direction for t in project.tests]
+        records, _ = _load_data()
+        done = [r for r in records if str(r.get("state", "")).lower() == "done"]
+        return build_pareto_layout(done, test_names, directions)
 
 
 def register_monitoring_callbacks(app) -> None:

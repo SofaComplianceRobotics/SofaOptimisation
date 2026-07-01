@@ -20,3 +20,12 @@ RUN = "OPT_RUN"                            # global run number within the trial
 SELECTED_TESTS = "OPT_SELECTED_TESTS"      # comma-separated test names
 TEST_WEIGHTS = "OPT_TEST_WEIGHTS"          # JSON {name: int percent}
 GATED_TESTS = "OPT_GATED_TESTS"            # comma-separated gated test names
+
+# Optimizer-setting overrides set by the dashboard's Run button so a launched
+# headless run honors the UI choices without editing the project (read once by
+# run_optimization → applied over the project fields before build_study):
+SAMPLER = "OPT_SAMPLER"                    # "cmaes" | "gp" | "tpe" | "random"
+CMAES_MARGIN = "OPT_CMAES_MARGIN"          # "1"/"true" to enable CMA-ES-with-Margin
+SEED_SAMPLER = "OPT_SEED_SAMPLER"          # "random" | "sobol" (initial-design)
+N_PARALLEL = "OPT_N_PARALLEL"              # int override for project.n_parallel
+N_GENERATIONS = "OPT_N_GENERATIONS"        # int override for project.n_generations

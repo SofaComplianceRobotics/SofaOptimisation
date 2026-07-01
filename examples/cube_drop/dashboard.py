@@ -1,13 +1,45 @@
-"""Open the cube-drop dashboard: ``python dashboard.py`` then browse :8050."""
+"""Open the cube-drop dashboard: ``python dashboard.py`` then browse http://localhost:8050.
 
+Usage::
+
+    python dashboard.py                          # default project
+    python dashboard.py --variant tpe            # TPE sampler run
+    python dashboard.py --variant python         # Python runner run
+    python dashboard.py --variant pareto         # Multi-objective run (shows Pareto tab)
+    python dashboard.py --variant pareto-python  # Multi-objective + Python runner
+"""
+
+import argparse
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from project import PROJECT  # noqa: E402
+from project import (  # noqa: E402
+    PROJECT,
+    PROJECT_MULTI_OBJ,
+    PROJECT_MULTI_OBJ_PYTHON,
+    PROJECT_PYTHON_RUNNER,
+    PROJECT_TPE,
+)
 
 from sofaopt import launch_dashboard  # noqa: E402
 
+_VARIANTS = {
+    "default":       PROJECT,
+    "tpe":           PROJECT_TPE,
+    "python":        PROJECT_PYTHON_RUNNER,
+    "pareto":        PROJECT_MULTI_OBJ,
+    "pareto-python": PROJECT_MULTI_OBJ_PYTHON,
+}
+
 if __name__ == "__main__":
-    launch_dashboard(PROJECT, port=8050, open_browser=True)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--variant",
+        choices=list(_VARIANTS),
+        default="default",
+        help="Project variant to view (default: %(default)s)",
+    )
+    args = parser.parse_args()
+    launch_dashboard(_VARIANTS[args.variant], port=8050, open_browser=True)
