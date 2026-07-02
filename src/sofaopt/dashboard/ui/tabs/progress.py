@@ -26,7 +26,6 @@ def build_progress_tab() -> html.Div:
             html.Div(id="progress-grid"),
             dcc.Store(id="jump-running-target-store"),
             html.Div(id="jump-running-target-output", style={"display": "none"}),
-            html.Div(id="jump-top-output", style={"display": "none"}),
             html.Div(
                 [
                     html.Button("Top", id="jump-top-button", n_clicks=0, className="btn btn-sm btn-secondary me-2"),

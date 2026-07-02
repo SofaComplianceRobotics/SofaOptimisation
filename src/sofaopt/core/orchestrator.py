@@ -6,15 +6,14 @@ import dataclasses
 import os
 import sys
 import time
-from pathlib import Path
 
 from sofaopt.core import envkeys
 from sofaopt.core.algorithm import build_study
 from sofaopt.core.generation.runner import run_generation
+from sofaopt.core.generation.types import RunHistory
 from sofaopt.core.runconfig import RunConfig
+from sofaopt.core.runtime_dirs import last_gen_index, reset_trials_dir
 from sofaopt.core.scoring import write_progress
-from sofaopt.core.state import TrialState
-from sofaopt.core.utils import reset_trials_dir
 from sofaopt.project import SofaOptProject
 
 
@@ -49,17 +48,6 @@ def _apply_env_overrides(project: SofaOptProject) -> SofaOptProject:
     return dataclasses.replace(project, **overrides)
 
 
-def _last_gen_index(trials_dir: Path) -> int:
-    """Highest generation number present on disk (0 when none)."""
-    last = 0
-    for d in trials_dir.glob("gen_*"):
-        try:
-            last = max(last, int(d.name.split("_")[1]))
-        except (IndexError, ValueError):
-            continue
-    return last
-
-
 def _post_run_video(project: SofaOptProject) -> None:
     """Auto-cleanup trial recordings and generate a summary video after the run."""
     try:
@@ -71,7 +59,7 @@ def _post_run_video(project: SofaOptProject) -> None:
             keep_bottom_n=project.record_keep_bottom_n,
         )
         summary_path = project.runtime_dir / "summary.mp4"
-        print(f"[video] Generating summary video → {summary_path}")
+        print(f"[video] Generating summary video -> {summary_path}")
         generate_summary_video(
             project,
             summary_path,
@@ -82,10 +70,65 @@ def _post_run_video(project: SofaOptProject) -> None:
         print(f"[video] Post-run video step failed: {exc}")
 
 
+def _maybe_prune_recordings(project: SofaOptProject, gen: int, prune_count: int) -> int:
+    """Periodic recording prune, fired each time the completed-trial count
+    crosses a multiple of ``record_prune_every_n``. Returns the updated count."""
+    if not project.record_frames or project.record_prune_every_n <= 0:
+        return prune_count
+    new_count = (gen * project.n_parallel) // project.record_prune_every_n
+    if new_count <= prune_count:
+        return prune_count
+    try:
+        from sofaopt.video import cleanup_trial_recordings
+        print(f"[video] {gen * project.n_parallel} trials completed: periodic prune ...")
+        cleanup_trial_recordings(
+            project,
+            keep_top_n=project.record_keep_top_n,
+            keep_bottom_n=project.record_keep_bottom_n,
+        )
+    except Exception as exc:
+        print(f"[video] Periodic prune failed: {exc}")
+    return new_count
+
+
+def _print_best_so_far(study, project: SofaOptProject) -> None:
+    if project.multi_objective:
+        try:
+            print(f"[best so far] {len(study.best_trials)} Pareto-optimal trial(s)")
+        except Exception:
+            print("[best so far] No valid trials yet.")
+        return
+    try:
+        best = study.best_trial
+        print(f"[best so far] Trial {best.number} -> {best.value:.2f}/100")
+    except ValueError:
+        print("[best so far] No valid trials yet.")
+
+
+def _report_results(study, project: SofaOptProject) -> None:
+    """Final console report once the run completes."""
+    if project.multi_objective:
+        try:
+            pareto = study.best_trials
+            print(f"Pareto front: {len(pareto)} trial(s)")
+            for t in pareto[:5]:
+                print(f"  Trial {t.number}: values={[round(v, 4) for v in t.values]}")
+        except Exception:
+            print("No valid trials found - all simulations failed.")
+        return
+    try:
+        best_trial = study.best_trial
+        print(f"Best trial:  {best_trial.number}")
+        print(f"Best value:  {best_trial.value:.4f}/100")
+        print(f"Best params: {best_trial.params}")
+    except ValueError:
+        print("No valid trials found - all simulations failed.")
+
+
 def run_optimization(
     project: SofaOptProject, cfg: RunConfig | None = None
 ) -> None:
-    """Run the full CMA-ES optimization for ``project``.
+    """Run the full optimization for ``project``.
 
     Args:
         project: The project to optimize.
@@ -119,26 +162,21 @@ def run_optimization(
     study = build_study(project.db_path, cfg, resume=resuming)
 
     # When resuming, continue generation numbering from the dirs actually on
-    # disk. (Counting COMPLETE Optuna trials under-counts when a previous run
-    # was killed mid-generation or trials were pruned, which made a resumed run
-    # reuse — and overwrite — existing gen_XXXX directories.)
-    gen_offset = _last_gen_index(project.trials_dir) if resuming else 0
+    # disk (see runtime_dirs.last_gen_index for why not the Optuna trial count).
+    gen_offset = last_gen_index(project.trials_dir) if resuming else 0
 
     env = cfg.base_scene_env()
-    state = TrialState()
-    state.load_test_specs(cfg.selected_tests)
+    history = RunHistory()
     started_at = time.time()
-    _prune_count = 0  # tracks how many periodic prunes have fired (trial-count based)
+    prune_count = 0  # how many periodic recording prunes have fired
 
     total_gens = gen_offset + project.n_generations
     for gen in range(gen_offset + 1, total_gens + 1):
-        state.advance_gen()
-        write_progress(cfg, gen, 0, state.all_scores, started_at, total_gens=total_gens)
-
+        write_progress(cfg, gen, 0, history.all_scores, started_at, total_gens=total_gens)
         print(f"\n{'=' * 50}\nGeneration {gen}/{total_gens}\n{'=' * 50}")
 
         trials = [study.ask() for _ in range(project.n_parallel)]
-        run_generation(cfg, gen, trials, study, env, state, started_at, total_gens=total_gens)
+        run_generation(cfg, gen, trials, study, env, history, started_at, total_gens=total_gens)
 
         if project.record_frames:
             try:
@@ -147,51 +185,10 @@ def run_optimization(
             except Exception as exc:
                 print(f"[video] Gen {gen}: overlay pass failed: {exc}")
 
-        if project.multi_objective:
-            try:
-                pareto = study.best_trials
-                print(f"[best so far] {len(pareto)} Pareto-optimal trial(s)")
-            except Exception:
-                print("[best so far] No valid trials yet.")
-        else:
-            try:
-                best = study.best_trial
-                print(f"[best so far] Trial {best.number} -> {best.value:.2f}/100")
-            except ValueError:
-                print("[best so far] No valid trials yet.")
-
-        if project.record_frames and project.record_prune_every_n > 0:
-            _new_prune = (gen * project.n_parallel) // project.record_prune_every_n
-            if _new_prune > _prune_count:
-                _prune_count = _new_prune
-                try:
-                    from sofaopt.video import cleanup_trial_recordings
-                    total = gen * project.n_parallel
-                    print(f"[video] {total} trials completed: periodic prune ...")
-                    cleanup_trial_recordings(
-                        project,
-                        keep_top_n=project.record_keep_top_n,
-                        keep_bottom_n=project.record_keep_bottom_n,
-                    )
-                except Exception as exc:
-                    print(f"[video] Periodic prune failed: {exc}")
+        _print_best_so_far(study, project)
+        prune_count = _maybe_prune_recordings(project, gen, prune_count)
 
     print("\nOptimization complete.")
     if project.record_frames:
         _post_run_video(project)
-    if project.multi_objective:
-        try:
-            pareto = study.best_trials
-            print(f"Pareto front: {len(pareto)} trial(s)")
-            for t in pareto[:5]:
-                print(f"  Trial {t.number}: values={[round(v, 4) for v in t.values]}")
-        except Exception:
-            print("No valid trials found - all simulations failed.")
-    else:
-        try:
-            best_trial = study.best_trial
-            print(f"Best trial:  {best_trial.number}")
-            print(f"Best value:  {best_trial.value:.4f}/100")
-            print(f"Best params: {best_trial.params}")
-        except ValueError:
-            print("No valid trials found - all simulations failed.")
+    _report_results(study, project)

@@ -1,4 +1,10 @@
-"""Score normalization, aggregation, and progress reporting."""
+"""Score normalization, aggregation, and progress reporting.
+
+The score pipeline has exactly one implementation and one order
+(dev_guidelines §11): per-run scores → :func:`aggregate_repeats` per test →
+:func:`normalize_test_score` by the test's ``max_score`` →
+:func:`combine_weighted` across tests → the 0–100 study objective.
+"""
 
 from __future__ import annotations
 
@@ -20,62 +26,41 @@ def normalize_test_score(score: float, max_score: float) -> float:
     return min(score / max_score, 1.0)
 
 
-def aggregate_trial_scores(
-    valid_scores: list[float],
-    weights: dict[str, float] | None = None,
-    names: list[str] | None = None,
-    max_scores: dict[str, float] | None = None,
-    aggregation: str = "mean",
-) -> tuple[float, float, float, float]:
-    """Aggregate scores using the configured method.
+def aggregate_repeats(scores: list[float], aggregation: str = "mean") -> float:
+    """Combine one test's repeat scores into a single per-test score.
 
-    When ``weights``, ``names`` and ``max_scores`` are all provided, computes a
-    0–100 score:  ``Σ min(score_i / max_i, 1.0) * weight_pct_i``. When combining
-    repeats of one test, omit those and a plain mean/median/sum is used.
-
-    Supported ``aggregation`` modes for repeats: ``"mean"`` (default),
-    ``"median"``, ``"sum"``, and ``"exponential_coverage"`` (rewards covering
-    multiple scenarios: each additional positive run multiplies the sum by 1.5).
-
-    Returns:
-        (aggregate_score, 0.0, final_score, median_score). The second element is
-        a retained-for-compatibility penalty slot, always 0.0; ``final_score``
-        equals ``aggregate_score``.
+    Modes: ``"mean"`` (default), ``"median"``, ``"sum"``, and
+    ``"exponential_coverage"`` (rewards covering multiple scenarios: each
+    additional positive run multiplies the sum by 1.5).
     """
-    if not valid_scores:
-        return 0.0, 0.0, 0.0, 0.0
-
-    avg_score = sum(valid_scores) / len(valid_scores)
-    median_score = statistics.median(valid_scores)
-
+    if not scores:
+        return 0.0
+    if aggregation == "median":
+        return statistics.median(scores)
     if aggregation == "sum":
-        aggregate_score = sum(valid_scores)
-        return aggregate_score, 0.0, aggregate_score, median_score
-
+        return sum(scores)
     if aggregation == "exponential_coverage":
-        n_positive = sum(1 for s in valid_scores if s > 0)
+        n_positive = sum(1 for s in scores if s > 0)
         multiplier = 1.5 ** (n_positive - 1) if n_positive > 0 else 0.0
-        aggregate_score = sum(valid_scores) * multiplier
-        return aggregate_score, 0.0, aggregate_score, median_score
+        return sum(scores) * multiplier
+    return sum(scores) / len(scores)
 
-    if (
-        weights is not None
-        and names is not None
-        and max_scores is not None
-        and len(names) == len(valid_scores)
-        and all(name in weights for name in names)
-        and all(name in max_scores for name in names)
-    ):
-        aggregate_score = sum(
-            normalize_test_score(score, max_scores[name]) * (weights[name] * 100)
-            for score, name in zip(valid_scores, names)
-        )
-    elif aggregation == "median":
-        aggregate_score = median_score
-    else:
-        aggregate_score = avg_score
 
-    return aggregate_score, 0.0, aggregate_score, median_score
+def combine_weighted(
+    per_test_scores: list[float],
+    names: list[str],
+    weights: dict[str, float],
+    max_scores: dict[str, float],
+) -> float:
+    """Combine per-test aggregate scores into the 0–100 study objective.
+
+    ``Σ min(score_i / max_i, 1.0) * weight_pct_i`` with ``weights`` as
+    fractions summing to 1 over the counted tests.
+    """
+    return sum(
+        normalize_test_score(score, max_scores[name]) * (weights[name] * 100)
+        for score, name in zip(per_test_scores, names)
+    )
 
 
 def write_gen_summary(gen_dir: Path, gen_index: int, scores: list[float]) -> None:

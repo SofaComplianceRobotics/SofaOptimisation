@@ -13,7 +13,11 @@ import pytest
 
 from sofaopt.core.algorithm import _aggregate_per_test, _gate_and_weight
 from sofaopt.core.runconfig import RunConfig
-from sofaopt.core.scoring import aggregate_trial_scores, normalize_test_score
+from sofaopt.core.scoring import (
+    aggregate_repeats,
+    combine_weighted,
+    normalize_test_score,
+)
 from sofaopt.core.trialprep import params_from_trial
 from sofaopt.project import ParamSpec, SofaOptProject, TestSpec
 
@@ -66,11 +70,11 @@ def test_normalize_plain_ratio():
 
 
 # ---------------------------------------------------------------------------
-# aggregate_trial_scores — repeat aggregation modes
+# aggregate_repeats / combine_weighted — the score pipeline
 # ---------------------------------------------------------------------------
 
 def test_aggregate_empty_scores():
-    assert aggregate_trial_scores([]) == (0.0, 0.0, 0.0, 0.0)
+    assert aggregate_repeats([]) == 0.0
 
 
 @pytest.mark.parametrize(
@@ -82,44 +86,33 @@ def test_aggregate_empty_scores():
     ],
 )
 def test_aggregate_repeat_modes(mode, scores, expected):
-    agg, _, final, _ = aggregate_trial_scores(scores, aggregation=mode)
-    assert agg == pytest.approx(expected)
-    assert final == pytest.approx(expected)
+    assert aggregate_repeats(scores, mode) == pytest.approx(expected)
 
 
 def test_aggregate_exponential_coverage_rewards_multiple_positives():
     # 2 positive runs -> sum * 1.5^(2-1)
-    agg, _, _, _ = aggregate_trial_scores(
-        [1.0, 2.0], aggregation="exponential_coverage"
+    assert aggregate_repeats([1.0, 2.0], "exponential_coverage") == pytest.approx(
+        3.0 * 1.5
     )
-    assert agg == pytest.approx(3.0 * 1.5)
     # no positive runs -> 0.0 multiplier
-    agg0, _, _, _ = aggregate_trial_scores(
-        [-1.0, 0.0], aggregation="exponential_coverage"
-    )
-    assert agg0 == 0.0
+    assert aggregate_repeats([-1.0, 0.0], "exponential_coverage") == 0.0
 
 
-def test_aggregate_weighted_cross_test_combination():
+def test_combine_weighted_cross_test_combination():
     # Two tests: 5/10 -> 0.5 normalized, 50/100 -> 0.5 normalized.
     # Weights 25% / 75% -> 0.5*25 + 0.5*75 = 50 (out of 100).
-    agg, _, final, _ = aggregate_trial_scores(
+    final = combine_weighted(
         [5.0, 50.0],
-        weights={"t1": 0.25, "t2": 0.75},
-        names=["t1", "t2"],
-        max_scores={"t1": 10.0, "t2": 100.0},
+        ["t1", "t2"],
+        {"t1": 0.25, "t2": 0.75},
+        {"t1": 10.0, "t2": 100.0},
     )
     assert final == pytest.approx(50.0)
 
 
-def test_aggregate_weighted_clamps_overachievers():
+def test_combine_weighted_clamps_overachievers():
     # 20/10 clamps to 1.0 before weighting.
-    _, _, final, _ = aggregate_trial_scores(
-        [20.0],
-        weights={"t1": 1.0},
-        names=["t1"],
-        max_scores={"t1": 10.0},
-    )
+    final = combine_weighted([20.0], ["t1"], {"t1": 1.0}, {"t1": 10.0})
     assert final == pytest.approx(100.0)
 
 

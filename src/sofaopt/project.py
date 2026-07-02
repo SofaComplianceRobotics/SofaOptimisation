@@ -244,7 +244,6 @@ class SofaOptProject:
     max_run_relaunches: int = 0
     sofa_realtime_timeout: float = 200.0
     prepare_timeout: float = 60.0
-    stl_delete_delay: float = 30.0
 
     # --- dashboard wiring (optional) --------------------------------------
     run_script: Path | None = None

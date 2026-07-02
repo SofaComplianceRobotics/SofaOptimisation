@@ -219,23 +219,22 @@ def wait_or_kill(proc: subprocess.Popen, timeout_s: float) -> bool:
     return True
 
 
-def active_sofa_process_count(processes: list[tuple]) -> int:
-    """Count running SOFA children across the generation's launched runs.
+def active_sofa_process_count(launched: list) -> int:
+    """Count running SOFA children across a generation's launched trials.
 
-    Each entry's third element is its ``runs`` list of ``(Popen, path, slot)``.
+    ``launched`` is a list of :class:`~sofaopt.core.generation.types.LaunchedTrial`
+    (duck-typed here to keep the layering: only ``.runs`` is read).
     """
     active = 0
-    for entry in processes:
-        if len(entry) < 3:
-            continue
-        for p, _, _ in entry[2]:
+    for entry in launched:
+        for p, _, _ in entry.runs:
             if p.poll() is None:
                 active += 1
     return active
 
 
 def wait_for_slot(
-    processes: list[tuple],
+    processes: list,
     limit: int,
     gen_index: int,
     trial_index: int,

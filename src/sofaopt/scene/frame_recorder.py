@@ -8,8 +8,10 @@ Fragmented MP4 (frag_keyframe+empty_moov) stays valid even when the runner
 is SIGKILL'd mid-simulation by ScoreWriter after writing the score — only the
 in-flight fragment is lost; all prior fragments decode correctly.
 
-This module is also imported by video.py so that both paths share the same
-camera injection and render logic.
+This module owns the camera injection and GL render used by BOTH capture
+paths: the in-run recorder here and the offline re-render in
+``sofaopt.video.single`` import the same ``inject_camera_and_lights`` /
+``render_frame_raw``, so recordings and re-renders are framed identically.
 """
 from __future__ import annotations
 

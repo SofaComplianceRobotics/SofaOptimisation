@@ -166,12 +166,6 @@ def register_monitoring_callbacks(app) -> None:
     )
 
     app.clientside_callback(
-        "function(n) { return window.dash_clientside.no_update; }",
-        Output("jump-top-output", "children"),
-        Input("jump-top-button", "n_clicks"),
-    )
-
-    app.clientside_callback(
         "function(n, cur) { if (!n) return window.dash_clientside.no_update; return !cur; }",
         Output("jump-auto-enabled", "data", allow_duplicate=True),
         Input("jump-auto-toggle", "n_clicks"),

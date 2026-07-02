@@ -6,8 +6,10 @@ from pathlib import Path
 
 import optuna
 
+import statistics
+
 from sofaopt.core.runconfig import RunConfig
-from sofaopt.core.scoring import aggregate_trial_scores
+from sofaopt.core.scoring import aggregate_repeats, combine_weighted
 from sofaopt.core.trial_state import (
     read_trial_run,
     read_trial_state,
@@ -157,10 +159,10 @@ def _aggregate_per_test(cfg: RunConfig, run_results: list[tuple]):
         scores_for_test = [0.0 if s == float("-inf") else s for s in raw_scores]
         crashed_runs = sum(1 for s in raw_scores if s == float("-inf"))
         test_names_in_order.append(test_name)
-        test_aggregate, _, _, test_median = aggregate_trial_scores(
-            scores_for_test,
-            aggregation=cfg.test_aggregations.get(test_name, "mean"),
+        test_aggregate = aggregate_repeats(
+            scores_for_test, cfg.test_aggregations.get(test_name, "mean")
         )
+        test_median = statistics.median(scores_for_test)
         max_score = cfg.test_max_scores.get(test_name, 1.0)
         test_run_total = next(
             (rt for name, _, rt in run_results if name == test_name and rt is not None),
@@ -293,12 +295,11 @@ def _finalize_trial_score(
     counted_scores = [per_test_details[name]["aggregate_score"] for name in counted_names]
     counted_max_scores = {name: cfg.test_max_scores.get(name, 1.0) for name in counted_names}
 
-    aggregate_score, _, final_score, median_score = aggregate_trial_scores(
-        counted_scores,
-        weights=counted_weights,
-        names=counted_names,
-        max_scores=counted_max_scores,
+    final_score = combine_weighted(
+        counted_scores, counted_names, counted_weights, counted_max_scores
     )
+    aggregate_score = final_score
+    median_score = statistics.median(counted_scores) if counted_scores else 0.0
     study.tell(trial, final_score)
 
     update_trial_summary(
