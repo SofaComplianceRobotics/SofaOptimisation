@@ -53,6 +53,10 @@ __all__ = [
     "run_optimization",
     "launch_dashboard",
     "run_sensitivity_analysis",
+    "archive_run",
+    "list_archives",
+    "restore_archive",
+    "delete_archive",
     "generate_trial_video",
     "generate_selected_videos",
     "generate_summary_video",
@@ -76,6 +80,10 @@ def __getattr__(name: str):
         from .sensitivity import run_sensitivity_analysis
 
         return run_sensitivity_analysis
+    if name in ("archive_run", "list_archives", "restore_archive", "delete_archive"):
+        from .core import archive
+
+        return getattr(archive, name)
     if name == "generate_trial_video":
         from .video import generate_trial_video
 

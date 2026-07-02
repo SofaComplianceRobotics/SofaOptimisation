@@ -19,6 +19,7 @@ except ImportError as exc:  # pragma: no cover
 
 from sofaopt.dashboard import context
 from sofaopt.dashboard.callbacks import (
+    register_archives_callbacks,
     register_config_callbacks,
     register_interactions_callbacks,
     register_monitoring_callbacks,
@@ -28,6 +29,7 @@ from sofaopt.dashboard.callbacks import (
     register_video_callbacks,
 )
 from sofaopt.dashboard.ui.tabs import (
+    build_archives_tab,
     build_config_tab,
     build_interactions_tab,
     build_optimise_tab,
@@ -88,6 +90,7 @@ def create_app(project: SofaOptProject) -> Dash:
         tab_defs.append(("Importance / Interactions", "interactions", build_interactions_tab()))
     if project.multi_objective:
         tab_defs.append(("Pareto Front", "pareto", build_pareto_tab()))
+    tab_defs.append(("Archives", "archives", build_archives_tab()))
     default_tab = tab_defs[0][1]
 
     app.layout = html.Div(
@@ -134,6 +137,7 @@ def create_app(project: SofaOptProject) -> Dash:
         register_interactions_callbacks(app)
     if project.multi_objective:
         register_pareto_callbacks(app)
+    register_archives_callbacks(app)
     _register_video_routes(app, project)
     return app
 

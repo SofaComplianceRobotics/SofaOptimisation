@@ -357,6 +357,16 @@ launch_dashboard(PROJECT, port=8050)
 Artifacts land under `work_dir/runtime/` (`trials/gen_XXXX/trial_YY/…`,
 `study.db`, `trials/progress.json`).
 
+**Archiving.** Starting a **fresh** run (no existing `study.db` to resume) no
+longer wipes `runtime/` — it *moves* it to `work_dir/archives/<timestamp>_auto/`
+first, so a new run can never destroy a previous one. Archive explicitly with
+`sofaopt.archive_run(PROJECT, name=..., notes=...)` or the dashboard's
+**Archives** tab, which also restores/deletes archives and compares runs
+(overlaid best-so-far curves + best-params diff). Restoring moves the archive
+back to `runtime/` — its `study.db` is intact, so the restored run can be
+resumed. Delete `work_dir/archives/` entries you don't need; they are plain
+directories.
+
 ---
 
 ## 8. Checklist

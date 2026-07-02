@@ -165,6 +165,13 @@ def run_optimization(
         project.previews_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"[resume] Found existing study at {project.db_path} — continuing without reset.")
     else:
+        # Starting fresh must never destroy a previous run: any existing run
+        # data is moved into work_dir/archives/ first (instant — a rename).
+        from sofaopt.core.archive import archive_run, runtime_has_run_data
+
+        if runtime_has_run_data(project):
+            archived = archive_run(project, name="auto")
+            logger.info(f"[archive] Previous run auto-archived to {archived.name}")
         reset_trials_dir(project.trials_dir, project.previews_dir)
 
     study = build_study(project.db_path, cfg, resume=resuming)

@@ -139,6 +139,30 @@ The web UI provides:
 - **"Generate Summary" button** — concatenates the top+bottom trial recordings into a
   single summary MP4.
 - **Live leaderboard, progress, parameter bounds, and Pareto front** tabs.
+- **Archives tab** — archive the current run (with a name and notes), restore or
+  delete archives, and **compare runs**: overlaid best-so-far convergence curves
+  plus a summary and best-params diff table.
+
+## Archiving runs
+
+Archiving *moves* `work_dir/runtime/` into `work_dir/archives/<timestamp>_<name>/`
+(instant, no copy) together with an `archive.json` manifest (settings snapshot,
+best score/params, notes) — and thereby resets the workspace. **Starting a fresh
+run auto-archives any existing run first**, so a new run can never destroy a
+previous one. Restoring moves an archive back to `runtime/` (auto-archiving the
+current run first); a restored run can be resumed since its `study.db` is intact.
+
+```python
+from sofaopt import archive_run, list_archives, restore_archive, delete_archive
+
+archive_run(PROJECT, name="baseline", notes="before widening bounds")
+for info in list_archives(PROJECT):
+    print(info.name, info.best_score, info.n_trials)
+restore_archive(PROJECT, list_archives(PROJECT)[0].path.name)
+```
+
+Comparison (also available in the dashboard's Archives tab) reads each run's
+*recorded* scores — the same numbers the studies optimized.
 
 ## Examples
 

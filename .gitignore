@@ -10,6 +10,7 @@ venv/
 
 # Optimization runtime artifacts (per-project work dirs)
 runtime/
+archives/
 *.db
 *.db-journal
 *.mp4

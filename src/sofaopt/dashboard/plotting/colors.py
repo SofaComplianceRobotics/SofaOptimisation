@@ -12,6 +12,21 @@ TEST_COLORS = [
     "#9b59b6",
 ]
 
+# Archive-comparison series colors: a CVD-validated categorical order
+# (worst adjacent-pair CVD deltaE 24.2 on white). Assigned by each archive's
+# stable position in the full archive list — color follows the run, never its
+# rank, so deselecting one run doesn't repaint the others.
+ARCHIVE_COLORS = [
+    "#2a78d6",  # blue
+    "#1baf7a",  # aqua
+    "#eda100",  # yellow
+    "#008300",  # green
+    "#4a3aa7",  # violet
+    "#e34948",  # red
+    "#e87ba4",  # magenta
+    "#eb6834",  # orange
+]
+
 C_BANNER = "#404867"
 C_BG = "#ffffff"
 C_BORDER = "#d0d3d8"
