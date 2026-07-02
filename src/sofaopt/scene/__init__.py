@@ -247,16 +247,18 @@ class ScoreWriter:
             runs = data.get("runs")
             if not isinstance(runs, list):
                 runs = []
-            while len(runs) < self.run_slot:
+            # run_slot is 1-based; clamp for standalone runs (runSofa GUI) where OPT_RUN_SLOT is unset (0)
+            slot_no = self.run_slot if self.run_slot >= 1 else 1
+            while len(runs) < slot_no:
                 runs.append({"run": len(runs) + 1})
 
-            slot = runs[self.run_slot - 1]
+            slot = runs[slot_no - 1]
             if not isinstance(slot, dict):
-                slot = {"run": self.run_slot}
+                slot = {"run": slot_no}
             slot.update(payload)
-            slot["run"] = self.run_slot
+            slot["run"] = slot_no
             slot["updated_at"] = self._now()
-            runs[self.run_slot - 1] = slot
+            runs[slot_no - 1] = slot
 
             data["runs"] = runs
             data["updated_at"] = self._now()
