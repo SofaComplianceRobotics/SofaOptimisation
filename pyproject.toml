@@ -37,6 +37,10 @@ dev = ["pytest>=7.0"]
 Homepage = "https://github.com/SofaComplianceRobotics/SofaOptimisation"
 Repository = "https://github.com/SofaComplianceRobotics/SofaOptimisation"
 
+[tool.pytest.ini_options]
+# TestSpec is a public dataclass whose name looks like a test class to pytest.
+filterwarnings = ["ignore::pytest.PytestCollectionWarning"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
