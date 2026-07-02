@@ -199,6 +199,26 @@ def launch_sofa(
     return proc
 
 
+def wait_or_kill(proc: subprocess.Popen, timeout_s: float) -> bool:
+    """Wait for one SOFA process to exit; kill it past ``timeout_s``.
+
+    The single-run form of the ``sofa_realtime_timeout`` backstop (the
+    generation finalizer applies the same timeout across its parallel scan).
+    The Job Object reaps any children of the killed process. Returns True
+    when the process exited on its own, False when it was killed.
+    """
+    deadline = time.time() + timeout_s
+    while proc.poll() is None:
+        if time.time() > deadline:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return False
+        time.sleep(0.2)
+    return True
+
+
 def active_sofa_process_count(processes: list[tuple]) -> int:
     """Count running SOFA children across the generation's launched runs.
 

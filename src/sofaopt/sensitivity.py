@@ -26,10 +26,10 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from sofaopt.core.runconfig import RunConfig
-from sofaopt.core.sofa_runner import launch_sofa
+from sofaopt.core.sofa_runner import launch_sofa, wait_or_kill
 from sofaopt.core.trial_state import init_trial_state, read_trial_run
 from sofaopt.core.trialprep import prepare_trial
-from sofaopt.project import ParamSpec, SofaOptProject
+from sofaopt.project import ParamSpec, SofaOptProject, TestSpec
 
 
 def run_sensitivity_analysis(
@@ -69,7 +69,6 @@ def run_sensitivity_analysis(
         cfg = RunConfig.from_project(project, selected_names=[_test])
 
     selected_test = cfg.selected_tests[0]
-    scene_file = selected_test.scene_file
 
     non_frozen: list[ParamSpec] = [p for p in project.params if not p.is_frozen]
     if param_names is not None:
@@ -99,72 +98,23 @@ def run_sensitivity_analysis(
 
         run_num = 0
         for param in target:
-            samples = _build_samples(param, n_samples)
             scores_for_param: list[float] = []
-
-            for sample_val in samples:
+            for sample_val in _build_samples(param, n_samples):
                 run_num += 1
-                run_dir = sens_dir / f"run_{run_num:04d}"
-                run_dir.mkdir()
-
                 params = {**defaults, param.name: sample_val}
-                trial_state_path = run_dir / "trial_state.json"
-
-                init_trial_state(
-                    trial_state_path,
-                    gen_index=0,
-                    trial_index=run_num,
-                    run_plan=[(selected_test.name, 1, 1)],
-                    params=params,
-                    test_weights={selected_test.name: 1.0},
-                    test_max_scores={selected_test.name: selected_test.max_score},
-                )
-
-                try:
-                    prep = prepare_trial(project, params, run_dir)
-                    run_env = {**env, **prep.env}
-                except Exception as exc:
-                    print(
-                        f"[sensitivity] prepare failed for "
-                        f"{param.name}={sample_val}: {exc}"
-                    )
-                    scores_for_param.append(float("-inf"))
-                    continue
-
-                params_path = run_dir / "params.json"
-                proc = launch_sofa(
+                score = _score_one_sample(
                     project,
-                    scene_file=scene_file,
-                    test_name=selected_test.name,
-                    test_run_index=1,
-                    test_run_total=1,
-                    trial_state_path=trial_state_path,
-                    params_path=params_path,
-                    run_slot=1,
-                    gen_index=0,
-                    trial_index=run_num,
-                    run_index=1,
-                    env=run_env,
+                    selected_test,
+                    params,
+                    run_dir=sens_dir / f"run_{run_num:04d}",
+                    run_num=run_num,
+                    env=env,
                 )
-
-                _wait(proc, project.sofa_realtime_timeout)
-
-                for asset in prep.cleanup:
-                    try:
-                        Path(asset).unlink(missing_ok=True)
-                    except Exception:
-                        pass
-
-                run_data = read_trial_run(trial_state_path, 1) or {}
-                raw = run_data.get("score")
-                score = float(raw) if isinstance(raw, (int, float)) else float("-inf")
                 scores_for_param.append(score)
                 if score != float("-inf"):
                     all_scores.append(score)
-
                 status = f"{score:.3f}" if score != float("-inf") else "FAILED"
                 print(f"[sensitivity]   {param.name}={sample_val!r} -> {status}")
-
             param_scores[param.name] = scores_for_param
 
         return _compute_sensitivities(param_scores, all_scores)
@@ -188,13 +138,65 @@ def _build_samples(param: ParamSpec, n_samples: int) -> list[Any]:
     return [lo + i * step for i in range(n_samples)]
 
 
-def _wait(proc, timeout: float) -> None:
-    start = time.time()
-    while proc.poll() is None:
-        if time.time() - start > timeout:
-            proc.kill()
-            break
-        time.sleep(0.2)
+def _score_one_sample(
+    project: SofaOptProject,
+    test: TestSpec,
+    params: dict[str, Any],
+    *,
+    run_dir: Path,
+    run_num: int,
+    env: dict[str, str],
+) -> float:
+    """Run one scene launch to completion and return its recorded score.
+
+    Uses the same launch + wall-clock-kill primitives as the optimizer
+    (``launch_sofa`` / ``wait_or_kill``) so timeout semantics cannot drift.
+    Returns ``-inf`` on prepare failure, crash, or timeout.
+    """
+    run_dir.mkdir()
+    trial_state_path = run_dir / "trial_state.json"
+    init_trial_state(
+        trial_state_path,
+        gen_index=0,
+        trial_index=run_num,
+        run_plan=[(test.name, 1, 1)],
+        params=params,
+        test_weights={test.name: 1.0},
+        test_max_scores={test.name: test.max_score},
+    )
+
+    try:
+        prep = prepare_trial(project, params, run_dir)
+        run_env = {**env, **prep.env}
+    except Exception as exc:
+        print(f"[sensitivity] prepare failed for run {run_num}: {exc}")
+        return float("-inf")
+
+    proc = launch_sofa(
+        project,
+        scene_file=test.scene_file,
+        test_name=test.name,
+        test_run_index=1,
+        test_run_total=1,
+        trial_state_path=trial_state_path,
+        params_path=run_dir / "params.json",
+        run_slot=1,
+        gen_index=0,
+        trial_index=run_num,
+        run_index=1,
+        env=run_env,
+    )
+    wait_or_kill(proc, project.sofa_realtime_timeout)
+
+    for asset in prep.cleanup:
+        try:
+            Path(asset).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    run_data = read_trial_run(trial_state_path, 1) or {}
+    raw = run_data.get("score")
+    return float(raw) if isinstance(raw, (int, float)) else float("-inf")
 
 
 def _compute_sensitivities(
@@ -222,7 +224,8 @@ def _compute_sensitivities(
     print(f"  {'Parameter':<28} {'Sensitivity':>12}  Direction")
     print(f"  {'-' * 28} {'-' * 12}  {'-' * 12}")
     for name, pct in sorted_result.items():
-        direction = "score↑" if pct > 0 else ("score↓" if pct < 0 else "no effect")
+        # ASCII only: cp1252 Windows consoles choke on arrow glyphs.
+        direction = "score up" if pct > 0 else ("score down" if pct < 0 else "no effect")
         print(f"  {name:<28} {pct:>+10.2f}%  {direction}")
     print()
 
