@@ -27,12 +27,15 @@ The same :func:`analyze` result also feeds the dashboard's
 
 from __future__ import annotations
 
+import logging
 import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import optuna
+
+logger = logging.getLogger(__name__)
 
 # Quiet Optuna's per-call logging when we read a study purely for analysis.
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -163,7 +166,7 @@ def main_effects(study: optuna.Study) -> dict[str, float]:
         imp = optuna.importance.get_param_importances(study, evaluator=evaluator)
         return {k: float(v) for k, v in imp.items()}
     except Exception as exc:  # too few trials / single distinct value, etc.
-        print(f"[analysis] main-effects (fANOVA) unavailable: {exc}")
+        logger.info(f"[analysis] main-effects (fANOVA) unavailable: {exc}")
         return {}
 
 
@@ -339,6 +342,6 @@ def save_report(report: InteractionReport, out_dir: str | Path) -> Path:
         fig.savefig(out_dir / "interactions.png", dpi=120)
         plt.close(fig)
     except Exception as exc:
-        print(f"[analysis] heatmap PNG skipped: {exc}")
+        logger.info(f"[analysis] heatmap PNG skipped: {exc}")
 
     return json_path

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import optuna
@@ -11,10 +12,13 @@ import statistics
 from sofaopt.core.runconfig import RunConfig
 from sofaopt.core.scoring import aggregate_repeats, combine_weighted
 from sofaopt.core.trial_state import (
+
     read_trial_run,
     read_trial_state,
     update_trial_summary,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _seed_sampler(project) -> optuna.samplers.BaseSampler:
@@ -45,7 +49,7 @@ def build_study(db_path: Path, cfg: RunConfig, resume: bool = False) -> optuna.S
     db_path.parent.mkdir(parents=True, exist_ok=True)
     if db_path.exists() and not resume:
         db_path.unlink()
-        print(f"[reset] Deleted {db_path.name}")
+        logger.info(f"[reset] Deleted {db_path.name}")
 
     project = cfg.project
     storage = optuna.storages.RDBStorage(f"sqlite:///{db_path}")
@@ -115,7 +119,7 @@ def _tell_pruned(study, trial, trial_state, trial_state_path, trial_index) -> fl
             "outcome": trial_state.get("outcome", "pruned"),
         },
     )
-    print(f"[score] trial_{trial_index:02d} -> pruned (generation pruned)")
+    logger.info(f"[score] trial_{trial_index:02d} -> pruned (generation pruned)")
     return float("-inf")
 
 
@@ -211,7 +215,7 @@ def _tell_multi_objective(
             "run_scores": [round(s, 4) if s != float("-inf") else None for s in run_scores],
         },
     )
-    print(
+    logger.info(
         f"\n[score] trial_{trial_index:02d} -> "
         f"objectives={[round(v, 4) for v in objective_values]}"
     )
@@ -276,7 +280,7 @@ def _finalize_trial_score(
     valid_scores = [s for s in run_scores if s != float("-inf")]
     if not valid_scores:
         final_score = _fail_trial(cfg, study, trial, trial_state_path, "all runs failed")
-        print(f"[score] trial_{trial_index:02d} -> {final_score:.2f} (all runs failed)")
+        logger.info(f"[score] trial_{trial_index:02d} -> {final_score:.2f} (all runs failed)")
         return final_score
 
     test_names_in_order, per_test_details = _aggregate_per_test(cfg, run_results)
@@ -331,7 +335,7 @@ def _finalize_trial_score(
             "run_scores": [round(s, 4) if s != float("-inf") else None for s in run_scores],
         },
     )
-    print(
+    logger.info(
         f"\n[score] trial_{trial_index:02d} -> {final_score:.2f}/100 "
         f"(weighted_normalized_agg: {aggregate_score:.2f}, gate={'open' if gate_open else 'closed'})"
     )

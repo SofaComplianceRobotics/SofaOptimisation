@@ -7,6 +7,7 @@ keeps running while relaunches wait for capacity.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,8 @@ from sofaopt.core.scoring import write_gen_summary
 from sofaopt.core.sofa_runner import active_sofa_process_count
 from sofaopt.core.trial_state import read_trial_run, read_trial_state, update_trial_run
 from sofaopt.core.trialprep import render_preview
+
+logger = logging.getLogger(__name__)
 
 _TERMINAL = {"done", "failed", "error", "pruned", "skipped", "cancelled"}
 
@@ -101,7 +104,7 @@ class _GenerationFinalizer:
                     self.gen_index, list(self.trial_state_paths_by_trial)
                 )
             except Exception as e:
-                print(f"[warn] on_generation_end hook failed: {e}")
+                logger.warning(f"[warn] on_generation_end hook failed: {e}")
 
         write_gen_summary(self.gen_dir, self.gen_index, self.gen_scores)
 
@@ -207,7 +210,7 @@ class _GenerationFinalizer:
         self._finalize_trial(entry)
 
     def _launch_gated_runs(self, entry: LaunchedTrial) -> None:
-        print(
+        logger.info(
             f"[gate] Gen {self.gen_index:04d} Trial {entry.trial_index:02d} "
             f"ungated success; launching gated tests."
         )
@@ -255,7 +258,7 @@ class _GenerationFinalizer:
         pct = (100.0 * total_done / total_runs) if total_runs else 100.0
         filled = int(_BAR_WIDTH * total_done / total_runs) if total_runs else _BAR_WIDTH
         bar = "#" * filled + "-" * (_BAR_WIDTH - filled)
-        print(
+        logger.info(
             f"\r[progress] Gen {self.gen_index:04d} SOFA [{bar}] "
             f"{total_done}/{total_runs} ({pct:5.1f}%)  "
             f"elapsed {time.time() - start_time:5.1f}s",
@@ -267,7 +270,7 @@ class _GenerationFinalizer:
         """Render previews now that all SOFA GL contexts for this gen are gone."""
         if not self.launch.preview_tasks:
             return
-        print(
+        logger.info(
             f"[preview] Gen {self.gen_index:04d} rendering "
             f"{len(self.launch.preview_tasks)} preview(s)"
         )
@@ -288,4 +291,4 @@ def _cleanup_trial_assets(assets_by_trial: dict) -> None:
                 if p.exists():
                     p.unlink()
             except Exception as exc:
-                print(f"[warn] Could not delete trial asset {asset}: {exc}")
+                logger.warning(f"[warn] Could not delete trial asset {asset}: {exc}")

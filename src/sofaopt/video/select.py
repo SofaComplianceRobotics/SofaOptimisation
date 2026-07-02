@@ -6,6 +6,7 @@ Trials are ranked by the *recorded* study score via
 
 from __future__ import annotations
 
+import logging
 import json
 import shutil
 import tempfile
@@ -15,6 +16,8 @@ from sofaopt.core.results import load_trial_records, rank_completed
 from sofaopt.video.ffmpeg import apply_text_overlay, concat_videos
 from sofaopt.video.overlay import format_param_line
 from sofaopt.video.single import generate_trial_video
+
+logger = logging.getLogger(__name__)
 
 
 def _rank_trials(project) -> list[dict]:
@@ -70,7 +73,7 @@ def generate_selected_videos(
 
     ranked = _rank_trials(project)
     if not ranked:
-        print("[video] No completed trials found.")
+        logger.info("[video] No completed trials found.")
         return []
 
     selected = _select_top_bottom(ranked, top_n, bottom_n)
@@ -92,13 +95,13 @@ def generate_selected_videos(
         fname = f"{rec['gen_name']}_{rec['trial_name']}_score{score:.1f}.mp4"
         out = output_dir / fname
         trial_dir = project.trials_dir / rec["gen_name"] / rec["trial_name"]
-        print(
+        logger.info(
             f"[video] [{i}/{len(selected)}] "
             f"{rec['gen_name']}/{rec['trial_name']} score={score:.1f}"
         )
         cached = trial_dir / "trial.mp4"
         if cached.exists():
-            print("[video]   -> using cached recording")
+            logger.info("[video]   -> using cached recording")
             shutil.copy2(cached, out)
             outputs.append(out)
             continue
@@ -118,9 +121,9 @@ def generate_selected_videos(
             )
             outputs.append(out)
         except Exception as exc:
-            print(f"[video]   -> failed: {exc}")
+            logger.info(f"[video]   -> failed: {exc}")
 
-    print(f"[video] Generated {len(outputs)}/{len(selected)} videos in {output_dir}")
+    logger.info(f"[video] Generated {len(outputs)}/{len(selected)} videos in {output_dir}")
     return outputs
 
 
@@ -158,7 +161,7 @@ def generate_summary_video(
 
     ranked = _rank_trials(project)
     if not ranked:
-        print("[video] No completed trials found.")
+        logger.info("[video] No completed trials found.")
         return
 
     clips = _select_top_bottom(ranked, top_n, bottom_n)
@@ -184,7 +187,7 @@ def generate_summary_video(
         for r in clips
     ]
     if all(p.exists() for p in cached_clips):
-        print(f"[video] Using {len(cached_clips)} cached recordings -> {output_path}")
+        logger.info(f"[video] Using {len(cached_clips)} cached recordings -> {output_path}")
         if text_overlay:
             tmp_dir = Path(tempfile.mkdtemp(prefix="sofaopt_sumovl_"))
             try:
@@ -198,7 +201,7 @@ def generate_summary_video(
                         )
                         overlaid.append(ovl)
                     except Exception as exc:
-                        print(
+                        logger.info(
                             f"[video]   overlay failed for clip {i}: {exc} "
                             "-- using raw clip"
                         )
@@ -208,7 +211,7 @@ def generate_summary_video(
                 shutil.rmtree(tmp_dir, ignore_errors=True)
         else:
             concat_videos(cached_clips, output_path, crf=crf, preset=preset)
-        print(f"[video] Summary saved: {output_path}")
+        logger.info(f"[video] Summary saved: {output_path}")
         return
 
     # Slow path: re-render each trial that has no cached recording.
@@ -220,13 +223,13 @@ def generate_summary_video(
             label = "best" if i <= top_n else "worst"
             trial_dir = project.trials_dir / rec["gen_name"] / rec["trial_name"]
             cached = trial_dir / "trial.mp4"
-            print(
+            logger.info(
                 f"[video] Clip {i}/{len(clips)} ({label}): "
                 f"{rec['gen_name']}/{rec['trial_name']} score={score:.1f}"
             )
             clip_out = tmp_dir / f"clip_{i:02d}_{label}.mp4"
             if cached.exists():
-                print("[video]   -> using cached recording")
+                logger.info("[video]   -> using cached recording")
                 if text_overlay:
                     try:
                         apply_text_overlay(
@@ -258,14 +261,14 @@ def generate_summary_video(
                 )
                 clip_paths.append(clip_out)
             except Exception as exc:
-                print(f"[video]   -> failed: {exc}")
+                logger.info(f"[video]   -> failed: {exc}")
 
         if not clip_paths:
             raise RuntimeError("No clips were generated; cannot create summary.")
 
-        print(f"[video] Concatenating {len(clip_paths)} clips -> {output_path}")
+        logger.info(f"[video] Concatenating {len(clip_paths)} clips -> {output_path}")
         concat_videos(clip_paths, output_path, crf=crf, preset=preset)
-        print(f"[video] Summary saved: {output_path}")
+        logger.info(f"[video] Summary saved: {output_path}")
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -288,7 +291,7 @@ def cleanup_trial_recordings(
     """
     ranked = _rank_trials(project)
     if not ranked:
-        print("[video] No completed trials found.")
+        logger.info("[video] No completed trials found.")
         return 0, 0
 
     keep_keys = {
@@ -308,7 +311,7 @@ def cleanup_trial_recordings(
             mp4.unlink()
             deleted += 1
 
-    print(f"[video] Recordings: kept {kept}, deleted {deleted}.")
+    logger.info(f"[video] Recordings: kept {kept}, deleted {deleted}.")
     return kept, deleted
 
 
@@ -347,4 +350,4 @@ def apply_generation_overlays(project, gen: int) -> None:
             apply_text_overlay(mp4, tmp, line1, line2, crf=32, preset="ultrafast")
             tmp.replace(mp4)
         except Exception as exc:
-            print(f"[video] Overlay failed for {trial_dir.name}: {exc}")
+            logger.info(f"[video] Overlay failed for {trial_dir.name}: {exc}")

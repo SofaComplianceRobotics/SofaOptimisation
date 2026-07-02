@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from sofaopt.core.runconfig import RunConfig
 from sofaopt.core.trial_state import (
+
     read_trial_state,
     update_trial_run,
     update_trial_summary,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def trial_has_ungated_positive_run(cfg: RunConfig, trial_state_path: Path) -> bool:
@@ -64,4 +68,4 @@ def prune_trial(
         trial_state_path,
         {"state": "pruned", "outcome": reason, "final_score": None},
     )
-    print(f"[prune] Gen {gen_index:04d} Trial {trial_index:02d}: {reason}")
+    logger.info(f"[prune] Gen {gen_index:04d} Trial {trial_index:02d}: {reason}")

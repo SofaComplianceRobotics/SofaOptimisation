@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 
 import plotly.graph_objects as go
@@ -9,6 +10,8 @@ import plotly.graph_objects as go
 from sofaopt.dashboard import context
 
 from .colors import C_BG
+
+logger = logging.getLogger(__name__)
 
 
 def _active_specs() -> list[dict]:
@@ -140,5 +143,5 @@ def _build_param_bounds_graph(show_heatmap: bool = False) -> go.Figure:
             fig.add_annotation(x=1.0, y=spec["name"], text=f"{spec['max']:.3f}", xanchor="right", yanchor="top", showarrow=False, yshift=-18, font=dict(size=9, color="#888"))
         return fig
     except Exception as exc:
-        print(f"[warn] Error building param bounds: {exc}")
+        logger.warning(f"[warn] Error building param bounds: {exc}")
         return go.Figure().add_annotation(text=f"Error: {exc}")

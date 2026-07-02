@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import dataclasses
 import os
 import sys
@@ -12,9 +13,15 @@ from sofaopt.core.algorithm import build_study
 from sofaopt.core.generation.runner import run_generation
 from sofaopt.core.generation.types import RunHistory
 from sofaopt.core.runconfig import RunConfig
-from sofaopt.core.runtime_dirs import last_gen_index, reset_trials_dir
+from sofaopt.core.runtime_dirs import (
+    configure_console_logging,
+    last_gen_index,
+    reset_trials_dir,
+)
 from sofaopt.core.scoring import write_progress
 from sofaopt.project import SofaOptProject
+
+logger = logging.getLogger(__name__)
 
 
 def _apply_env_overrides(project: SofaOptProject) -> SofaOptProject:
@@ -41,10 +48,10 @@ def _apply_env_overrides(project: SofaOptProject) -> SofaOptProject:
             try:
                 overrides[field] = int(raw)
             except ValueError:
-                print(f"[override] Ignoring non-int {key}={raw!r}")
+                logger.info(f"[override] Ignoring non-int {key}={raw!r}")
     if not overrides:
         return project
-    print(f"[override] Applying env optimizer overrides: {overrides}")
+    logger.info(f"[override] Applying env optimizer overrides: {overrides}")
     return dataclasses.replace(project, **overrides)
 
 
@@ -52,14 +59,14 @@ def _post_run_video(project: SofaOptProject) -> None:
     """Auto-cleanup trial recordings and generate a summary video after the run."""
     try:
         from sofaopt.video import cleanup_trial_recordings, generate_summary_video
-        print("\n[video] Pruning trial recordings ...")
+        logger.info("\n[video] Pruning trial recordings ...")
         cleanup_trial_recordings(
             project,
             keep_top_n=project.record_keep_top_n,
             keep_bottom_n=project.record_keep_bottom_n,
         )
         summary_path = project.runtime_dir / "summary.mp4"
-        print(f"[video] Generating summary video -> {summary_path}")
+        logger.info(f"[video] Generating summary video -> {summary_path}")
         generate_summary_video(
             project,
             summary_path,
@@ -67,7 +74,7 @@ def _post_run_video(project: SofaOptProject) -> None:
             bottom_n=project.record_summary_bottom_n,
         )
     except Exception as exc:
-        print(f"[video] Post-run video step failed: {exc}")
+        logger.info(f"[video] Post-run video step failed: {exc}")
 
 
 def _maybe_prune_recordings(project: SofaOptProject, gen: int, prune_count: int) -> int:
@@ -80,29 +87,29 @@ def _maybe_prune_recordings(project: SofaOptProject, gen: int, prune_count: int)
         return prune_count
     try:
         from sofaopt.video import cleanup_trial_recordings
-        print(f"[video] {gen * project.n_parallel} trials completed: periodic prune ...")
+        logger.info(f"[video] {gen * project.n_parallel} trials completed: periodic prune ...")
         cleanup_trial_recordings(
             project,
             keep_top_n=project.record_keep_top_n,
             keep_bottom_n=project.record_keep_bottom_n,
         )
     except Exception as exc:
-        print(f"[video] Periodic prune failed: {exc}")
+        logger.info(f"[video] Periodic prune failed: {exc}")
     return new_count
 
 
 def _print_best_so_far(study, project: SofaOptProject) -> None:
     if project.multi_objective:
         try:
-            print(f"[best so far] {len(study.best_trials)} Pareto-optimal trial(s)")
+            logger.info(f"[best so far] {len(study.best_trials)} Pareto-optimal trial(s)")
         except Exception:
-            print("[best so far] No valid trials yet.")
+            logger.info("[best so far] No valid trials yet.")
         return
     try:
         best = study.best_trial
-        print(f"[best so far] Trial {best.number} -> {best.value:.2f}/100")
+        logger.info(f"[best so far] Trial {best.number} -> {best.value:.2f}/100")
     except ValueError:
-        print("[best so far] No valid trials yet.")
+        logger.info("[best so far] No valid trials yet.")
 
 
 def _report_results(study, project: SofaOptProject) -> None:
@@ -110,19 +117,19 @@ def _report_results(study, project: SofaOptProject) -> None:
     if project.multi_objective:
         try:
             pareto = study.best_trials
-            print(f"Pareto front: {len(pareto)} trial(s)")
+            logger.info(f"Pareto front: {len(pareto)} trial(s)")
             for t in pareto[:5]:
-                print(f"  Trial {t.number}: values={[round(v, 4) for v in t.values]}")
+                logger.info(f"  Trial {t.number}: values={[round(v, 4) for v in t.values]}")
         except Exception:
-            print("No valid trials found - all simulations failed.")
+            logger.info("No valid trials found - all simulations failed.")
         return
     try:
         best_trial = study.best_trial
-        print(f"Best trial:  {best_trial.number}")
-        print(f"Best value:  {best_trial.value:.4f}/100")
-        print(f"Best params: {best_trial.params}")
+        logger.info(f"Best trial:  {best_trial.number}")
+        logger.info(f"Best value:  {best_trial.value:.4f}/100")
+        logger.info(f"Best params: {best_trial.params}")
     except ValueError:
-        print("No valid trials found - all simulations failed.")
+        logger.info("No valid trials found - all simulations failed.")
 
 
 def run_optimization(
@@ -139,6 +146,7 @@ def run_optimization(
     # Apply dashboard/env optimizer-setting overrides before anything reads the
     # project's sampler fields. Skip when the caller supplied a pre-built cfg
     # (it already pins project/selection and overriding would desync cfg.project).
+    configure_console_logging()
     if cfg is None:
         project = _apply_env_overrides(project)
         cfg = RunConfig.from_env(project)
@@ -155,7 +163,7 @@ def run_optimization(
     if resuming:
         project.trials_dir.mkdir(parents=True, exist_ok=True)
         project.previews_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[resume] Found existing study at {project.db_path} — continuing without reset.")
+        logger.info(f"[resume] Found existing study at {project.db_path} — continuing without reset.")
     else:
         reset_trials_dir(project.trials_dir, project.previews_dir)
 
@@ -173,7 +181,7 @@ def run_optimization(
     total_gens = gen_offset + project.n_generations
     for gen in range(gen_offset + 1, total_gens + 1):
         write_progress(cfg, gen, 0, history.all_scores, started_at, total_gens=total_gens)
-        print(f"\n{'=' * 50}\nGeneration {gen}/{total_gens}\n{'=' * 50}")
+        logger.info(f"\n{'=' * 50}\nGeneration {gen}/{total_gens}\n{'=' * 50}")
 
         trials = [study.ask() for _ in range(project.n_parallel)]
         run_generation(cfg, gen, trials, study, env, history, started_at, total_gens=total_gens)
@@ -183,12 +191,12 @@ def run_optimization(
                 from sofaopt.video import apply_generation_overlays
                 apply_generation_overlays(project, gen)
             except Exception as exc:
-                print(f"[video] Gen {gen}: overlay pass failed: {exc}")
+                logger.info(f"[video] Gen {gen}: overlay pass failed: {exc}")
 
         _print_best_so_far(study, project)
         prune_count = _maybe_prune_recordings(project, gen, prune_count)
 
-    print("\nOptimization complete.")
+    logger.info("\nOptimization complete.")
     if project.record_frames:
         _post_run_video(project)
     _report_results(study, project)

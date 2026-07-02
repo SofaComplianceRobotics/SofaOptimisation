@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 
@@ -16,6 +17,8 @@ from sofaopt.core.sofa_runner import (
 )
 from sofaopt.core.trial_state import update_trial_run, update_trial_summary
 from sofaopt.core.trialprep import params_from_trial, prepare_trial, render_preview
+
+logger = logging.getLogger(__name__)
 
 
 def _mark_all_runs(trial_state_path: Path, run_count: int, state: str) -> None:
@@ -81,7 +84,7 @@ def _launch_one_run(
         run_index=run_slot,
         env=entry.trial_env,
     )
-    print(
+    logger.info(
         f"[sofa] Gen {gen_index:04d} Trial {entry.trial_index:02d} "
         f"Run {run_slot}/{cfg.n_repeats} [{test_name} {test_run_index}/{test_run_total}]"
     )
@@ -174,7 +177,7 @@ def _record_prepare_failure(
     """
     project = cfg.project
     hard_fail = project.hard_fail_score
-    print(f"[error] Gen {gen_index:04d} Trial {trial_index:02d}: {error}")
+    logger.error(f"[error] Gen {gen_index:04d} Trial {trial_index:02d}: {error}")
     if result.failed_preview is not None:
         render_preview(
             result.failed_preview, trial_dir, gen_index, trial_index,

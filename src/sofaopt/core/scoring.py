@@ -8,12 +8,15 @@ The score pipeline has exactly one implementation and one order
 
 from __future__ import annotations
 
+import logging
 import statistics
 import time
 from pathlib import Path
 
 from sofaopt.core.io import write_json
 from sofaopt.core.runconfig import RunConfig
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_test_score(score: float, max_score: float) -> float:
@@ -82,7 +85,7 @@ def write_gen_summary(gen_dir: Path, gen_index: int, scores: list[float]) -> Non
     best_str = (
         f"{summary['best_score']:.2f}" if summary["best_score"] is not None else "n/a"
     )
-    print(
+    logger.info(
         f"[summary] Gen {gen_index:04d} - "
         f"avg: {avg_str}/100  best: {best_str}/100  "
         f"({len(valid_scores)}/{len(scores)} trials)"

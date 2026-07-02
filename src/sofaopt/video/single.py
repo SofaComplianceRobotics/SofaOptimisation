@@ -8,6 +8,7 @@ uses, so an offline re-render is framed identically to a live recording
 
 from __future__ import annotations
 
+import logging
 import importlib.util
 import json
 import os
@@ -23,6 +24,8 @@ from sofaopt.core.sofa_bootstrap import register_sofa_dll_dirs
 from sofaopt.scene.frame_recorder import inject_camera_and_lights, render_frame_raw
 from sofaopt.video.ffmpeg import encode_video
 from sofaopt.video.overlay import add_overlay_text, build_overlay_text, write_png
+
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -270,7 +273,7 @@ def generate_trial_video(
             "No frames were captured — the simulation stopped before the first step."
         )
 
-    print(f"[video] Captured {captured} frames ({step} sim steps) at {width}x{height}")
+    logger.info(f"[video] Captured {captured} frames ({step} sim steps) at {width}x{height}")
 
     encode_video(frame_dir, output_path, fps=fps, crf=crf, preset=preset)
     shutil.rmtree(frame_dir, ignore_errors=True)
@@ -278,4 +281,4 @@ def generate_trial_video(
     if video_prep_dir is not None:
         shutil.rmtree(video_prep_dir, ignore_errors=True)
 
-    print(f"[video] Saved: {output_path}")
+    logger.info(f"[video] Saved: {output_path}")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -11,6 +12,8 @@ from dash import Input, Output, State, html
 from dash.exceptions import PreventUpdate
 
 from sofaopt.dashboard import context
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +72,7 @@ def _spawn_test_run(project, trial_dir: Path) -> None:
             if prep is not None:
                 extra_env = {k: str(v) for k, v in prep.env.items()}
         except Exception as exc:
-            print(f"[dashboard] prepare_trial for test run failed: {exc}")
+            logger.info(f"[dashboard] prepare_trial for test run failed: {exc}")
 
     scene_file = _test_scene_file(project, trial_dir)
     plugins = list(project.sofa_plugins)

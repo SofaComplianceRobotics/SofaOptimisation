@@ -1,5 +1,6 @@
 """Performance graph and leaderboard."""
 
+import logging
 import plotly.graph_objects as go
 
 from sofaopt.dashboard import context as _ctx
@@ -11,6 +12,8 @@ from .traces import (
     _build_final_ticks,
     _build_hover_overlay,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _build_performance_graph(records: list[dict], summaries: list[dict]) -> go.Figure:
@@ -52,7 +55,7 @@ def _build_performance_graph(records: list[dict], summaries: list[dict]) -> go.F
             pass
         return fig
     except Exception as exc:
-        print(f"[warn] Error building performance graph: {exc}")
+        logger.warning(f"[warn] Error building performance graph: {exc}")
         return go.Figure().add_annotation(text=f"Error: {exc}")
 
 

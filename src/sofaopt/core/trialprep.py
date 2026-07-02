@@ -15,11 +15,14 @@ no hook at all — the scene just reads ``params.json``.
 
 from __future__ import annotations
 
+import logging
 import json
 from pathlib import Path
 from typing import Any
 
 from sofaopt.project import SofaOptProject, TrialPrep
+
+logger = logging.getLogger(__name__)
 
 
 def _round_float(value: float) -> float:
@@ -146,15 +149,15 @@ def render_preview(
         else:
             shutil.copy2(image, local_path)
         shutil.copy2(local_path, previews_dir / flat_name)
-        print(f"[preview] Saved {flat_name}")
+        logger.info(f"[preview] Saved {flat_name}")
     except Exception as e:
-        print(f"[warn] Preview failed for {image.name}: {e}")
+        logger.warning(f"[warn] Preview failed for {image.name}: {e}")
         if failed_preview is not None and failed_preview.exists():
             try:
                 shutil.copy2(failed_preview, local_path)
                 shutil.copy2(local_path, previews_dir / flat_name)
             except Exception as fallback_err:
-                print(f"[warn] Failed-preview fallback failed: {fallback_err}")
+                logger.warning(f"[warn] Failed-preview fallback failed: {fallback_err}")
 
 
 def _render_stl(stl_path: Path, out_png: Path) -> None:

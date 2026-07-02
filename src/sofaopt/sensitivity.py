@@ -19,6 +19,7 @@ choose a ``sampler`` better suited to the active dimension count.
 
 from __future__ import annotations
 
+import logging
 import json
 import shutil
 import time
@@ -30,6 +31,8 @@ from sofaopt.core.sofa_runner import launch_sofa, wait_or_kill
 from sofaopt.core.trial_state import init_trial_state, read_trial_run
 from sofaopt.core.trialprep import prepare_trial
 from sofaopt.project import ParamSpec, SofaOptProject, TestSpec
+
+logger = logging.getLogger(__name__)
 
 
 def run_sensitivity_analysis(
@@ -77,7 +80,7 @@ def run_sensitivity_analysis(
         target = non_frozen
 
     if not target:
-        print("[sensitivity] No non-frozen params to analyse.")
+        logger.info("[sensitivity] No non-frozen params to analyse.")
         return {}
 
     defaults: dict[str, Any] = {p.name: p.default for p in project.params}
@@ -87,7 +90,7 @@ def run_sensitivity_analysis(
     sens_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        print(
+        logger.info(
             f"[sensitivity] Analysing {len(target)} param(s), "
             f"{n_samples} samples each, test={selected_test.name!r}"
         )
@@ -114,7 +117,7 @@ def run_sensitivity_analysis(
                 if score != float("-inf"):
                     all_scores.append(score)
                 status = f"{score:.3f}" if score != float("-inf") else "FAILED"
-                print(f"[sensitivity]   {param.name}={sample_val!r} -> {status}")
+                logger.info(f"[sensitivity]   {param.name}={sample_val!r} -> {status}")
             param_scores[param.name] = scores_for_param
 
         return _compute_sensitivities(param_scores, all_scores)
@@ -169,7 +172,7 @@ def _score_one_sample(
         prep = prepare_trial(project, params, run_dir)
         run_env = {**env, **prep.env}
     except Exception as exc:
-        print(f"[sensitivity] prepare failed for run {run_num}: {exc}")
+        logger.info(f"[sensitivity] prepare failed for run {run_num}: {exc}")
         return float("-inf")
 
     proc = launch_sofa(
@@ -220,13 +223,13 @@ def _compute_sensitivities(
         sorted(raw.items(), key=lambda kv: abs(kv[1]), reverse=True)
     )
 
-    print("\n[sensitivity] Results (param -> effect % of global score range):")
-    print(f"  {'Parameter':<28} {'Sensitivity':>12}  Direction")
-    print(f"  {'-' * 28} {'-' * 12}  {'-' * 12}")
+    logger.info("\n[sensitivity] Results (param -> effect % of global score range):")
+    logger.info(f"  {'Parameter':<28} {'Sensitivity':>12}  Direction")
+    logger.info(f"  {'-' * 28} {'-' * 12}  {'-' * 12}")
     for name, pct in sorted_result.items():
         # ASCII only: cp1252 Windows consoles choke on arrow glyphs.
         direction = "score up" if pct > 0 else ("score down" if pct < 0 else "no effect")
-        print(f"  {name:<28} {pct:>+10.2f}%  {direction}")
-    print()
+        logger.info(f"  {name:<28} {pct:>+10.2f}%  {direction}")
+    logger.info()
 
     return sorted_result

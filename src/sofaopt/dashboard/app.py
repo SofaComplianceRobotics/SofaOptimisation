@@ -51,6 +51,8 @@ from sofaopt.dashboard.ui.tabs.styles import (
 )
 from sofaopt.project import SofaOptProject
 
+logger = logging.getLogger(__name__)
+
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 logging.getLogger("dash").setLevel(logging.ERROR)
 
@@ -159,12 +161,15 @@ def launch_dashboard(
     project: SofaOptProject, port: int = 8050, open_browser: bool = True
 ) -> None:
     """Start the dashboard web server for ``project``."""
+    from sofaopt.core.runtime_dirs import configure_console_logging
+
+    configure_console_logging()
     for _stream in (sys.stdout, sys.stderr):
         try:
             _stream.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
-    print(f"[info] Starting {project.title or project.name} on http://localhost:{port}")
+    logger.info(f"[info] Starting {project.title or project.name} on http://localhost:{port}")
     os.environ["WERKZEUG_RUN_MAIN"] = "false"
     os.environ.pop("WERKZEUG_SERVER_FD", None)
 

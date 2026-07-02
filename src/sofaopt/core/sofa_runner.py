@@ -8,6 +8,7 @@ never outlive the optimizer.
 
 from __future__ import annotations
 
+import logging
 import json
 import os
 import subprocess
@@ -17,6 +18,8 @@ from pathlib import Path
 
 from sofaopt.core import envkeys
 from sofaopt.project import SofaOptProject
+
+logger = logging.getLogger(__name__)
 
 # --- Windows Job Object: kill all SOFA children if the optimizer dies ---------
 SOFA_JOB_HANDLE = None
@@ -105,7 +108,7 @@ def attach_process_to_sofa_job(proc: subprocess.Popen) -> None:
         SOFA_JOB_HANDLE, wintypes.HANDLE(proc._handle)
     ):
         err = ctypes.get_last_error()
-        print(f"[warn] Could not attach SOFA process {proc.pid} to job (winerr={err}).")
+        logger.warning(f"[warn] Could not attach SOFA process {proc.pid} to job (winerr={err}).")
 
 
 def launch_sofa(
@@ -252,13 +255,13 @@ def wait_for_slot(
     warned = False
     while active_sofa_process_count(processes) >= limit:
         if not warned:
-            print(
+            logger.info(
                 f"[throttle] Gen {gen_index:04d} Trial {trial_index:02d} "
                 f"waiting for active SOFA < {limit}"
             )
             warned = True
         if deadline is not None and time.time() > deadline:
-            print(
+            logger.info(
                 f"[throttle] Gen {gen_index:04d} Trial {trial_index:02d} "
                 f"waited {timeout_s:.0f}s with no free slot; launching anyway (backstop)"
             )
