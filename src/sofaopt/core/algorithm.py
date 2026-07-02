@@ -60,7 +60,17 @@ def build_study(db_path: Path, cfg: RunConfig, resume: bool = False) -> optuna.S
         )
 
     if project.sampler == "cmaes":
+        # Center the search on the ParamSpec defaults (the documented contract).
+        # Only float/int non-frozen params are in the CMA-ES space; bools are
+        # categorical and handled by the independent sampler.
+        x0 = {
+            p.name: min(max(p.default, p.low), p.high)
+            for p in project.params
+            if not p.is_frozen and p.type in ("float", "int")
+        }
         sampler = optuna.samplers.CmaEsSampler(
+            x0=x0 or None,
+            sigma0=project.cmaes_sigma0,
             popsize=project.n_parallel,
             n_startup_trials=project.cmaes_startup_trials,
             consider_pruned_trials=True,

@@ -172,7 +172,13 @@ def main_effects(study: optuna.Study) -> dict[str, float]:
 # ---------------------------------------------------------------------------
 
 def _fit_surrogate(X: np.ndarray, y: np.ndarray, random_state: int):
-    from sklearn.ensemble import RandomForestRegressor
+    try:
+        from sklearn.ensemble import RandomForestRegressor
+    except ImportError as err:
+        raise ImportError(
+            "The interaction analysis needs scikit-learn: "
+            "pip install sofaopt[analysis]"
+        ) from err
 
     model = RandomForestRegressor(
         n_estimators=300, min_samples_leaf=2, n_jobs=-1, random_state=random_state

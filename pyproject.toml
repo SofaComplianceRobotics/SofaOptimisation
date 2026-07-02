@@ -26,6 +26,11 @@ dependencies = [
 dashboard = ["dash>=2.0", "plotly>=5.0"]
 # STL preview rendering for shape-optimization projects (optional).
 preview = ["pyvista>=0.40"]
+# Post-hoc parameter analysis: fANOVA importance + surrogate interaction map.
+analysis = ["scikit-learn>=1.1"]
+# Trial recording and offline video generation (record_frames=True, video.py,
+# the dashboard's summary-video button). ffmpeg stays an external tool on PATH.
+video = ["pygame>=2.1", "PyOpenGL>=3.1", "Pillow>=9.0", "opencv-python>=4.5"]
 dev = ["pytest>=7.0"]
 
 [project.urls]

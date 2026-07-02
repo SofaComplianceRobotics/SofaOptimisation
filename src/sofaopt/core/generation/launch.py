@@ -32,6 +32,7 @@ def _mark_all_runs(trial_state_path: Path, run_count: int, state: str) -> None:
 def _launch_one_run(
     cfg: RunConfig,
     *,
+    processes: list[tuple],
     gen_index: int,
     trial_index: int,
     run_slot: int,
@@ -43,7 +44,19 @@ def _launch_one_run(
     trial_env: dict,
     launch_times_by_slot: dict[int, float],
 ) -> tuple:
-    """Mark a slot launching and start its SOFA process. Returns the run tuple."""
+    """Mark a slot launching and start its SOFA process. Returns the run tuple.
+
+    The global ``max_active_sofa_procs`` cap is enforced here, per run — every
+    launch path (initial, gated, probe relaunch) goes through this function, so
+    no path can exceed the cap regardless of ``n_parallel × run_count``.
+    """
+    wait_for_slot(
+        processes,
+        cfg.project.max_active_sofa_procs,
+        gen_index,
+        trial_index,
+        timeout_s=cfg.project.sofa_realtime_timeout,
+    )
     scene_file = cfg.project.test(test_name).scene_file
     update_trial_run(
         trial_state_path,
@@ -127,7 +140,6 @@ def launch_generation_trials(
 
         if active_sofa_process_count(processes) >= max_active:
             _mark_all_runs(trial_state_path, len(run_plan), "waiting-slot")
-        wait_for_slot(processes, max_active, gen_index, trial_index)
 
         params = params_from_trial(trial, project)
 
@@ -142,51 +154,64 @@ def launch_generation_trials(
             runs: list[tuple] = []
             pending_gated_runs: list[tuple[int, str, int, int]] = []
             launch_times_by_slot: dict[int, float] = {}
-
-            for r, (test_name, test_run_index, test_run_total) in enumerate(run_plan):
-                run_slot = r + 1
-                if test_name in gated:
-                    pending_gated_runs.append(
-                        (run_slot, test_name, test_run_index, test_run_total)
-                    )
-                    update_trial_run(
-                        trial_state_path,
-                        run_slot,
-                        {
-                            "state": "pending",
-                            "score": None,
-                            "reason": "gated_test_waiting_for_ungated_success",
-                        },
-                    )
-                    continue
-                runs.append(
-                    _launch_one_run(
-                        cfg,
-                        gen_index=gen_index,
-                        trial_index=trial_index,
-                        run_slot=run_slot,
-                        test_name=test_name,
-                        test_run_index=test_run_index,
-                        test_run_total=test_run_total,
-                        trial_state_path=trial_state_path,
-                        params_path=params_path,
-                        trial_env=trial_env,
-                        launch_times_by_slot=launch_times_by_slot,
-                    )
-                )
-
-            processes.append(
-                (
-                    trial_index,
-                    trial,
-                    runs,
-                    pending_gated_runs,
-                    trial_state_path,
-                    trial_env,
-                    params_path,
-                    launch_times_by_slot,
-                )
+            # Register the entry *before* launching so this trial's own earlier
+            # runs count toward the throttle, and so a mid-trial launch failure
+            # can't leave already-started processes untracked.
+            entry = (
+                trial_index,
+                trial,
+                runs,
+                pending_gated_runs,
+                trial_state_path,
+                trial_env,
+                params_path,
+                launch_times_by_slot,
             )
+            processes.append(entry)
+
+            try:
+                for r, (test_name, test_run_index, test_run_total) in enumerate(run_plan):
+                    run_slot = r + 1
+                    if test_name in gated:
+                        pending_gated_runs.append(
+                            (run_slot, test_name, test_run_index, test_run_total)
+                        )
+                        update_trial_run(
+                            trial_state_path,
+                            run_slot,
+                            {
+                                "state": "pending",
+                                "score": None,
+                                "reason": "gated_test_waiting_for_ungated_success",
+                            },
+                        )
+                        continue
+                    runs.append(
+                        _launch_one_run(
+                            cfg,
+                            processes=processes,
+                            gen_index=gen_index,
+                            trial_index=trial_index,
+                            run_slot=run_slot,
+                            test_name=test_name,
+                            test_run_index=test_run_index,
+                            test_run_total=test_run_total,
+                            trial_state_path=trial_state_path,
+                            params_path=params_path,
+                            trial_env=trial_env,
+                            launch_times_by_slot=launch_times_by_slot,
+                        )
+                    )
+            except Exception:
+                # The trial is about to be hard-failed: untrack it and kill any
+                # runs that did start, so nothing keeps running unsupervised.
+                processes.remove(entry)
+                for proc, _, _ in runs:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                raise
 
         except Exception as e:
             print(f"[error] Gen {gen_index:04d} Trial {trial_index:02d}: {e}")

@@ -186,17 +186,19 @@ class FrameRecorder:
     @classmethod
     def from_env(cls) -> "FrameRecorder | None":
         """Return a recorder configured from environment variables, or None."""
-        if os.environ.get("OPT_RECORD_FRAMES") != "1":
+        from sofaopt.core import envkeys
+
+        if os.environ.get(envkeys.RECORD_FRAMES) != "1":
             return None
-        output = os.environ.get("OPT_RECORD_OUTPUT", "")
+        output = os.environ.get(envkeys.RECORD_OUTPUT, "")
         if not output:
             return None
         return cls(
             Path(output),
-            width=int(os.environ.get("OPT_RECORD_WIDTH",  "640")),
-            height=int(os.environ.get("OPT_RECORD_HEIGHT", "480")),
-            fps=int(os.environ.get("OPT_RECORD_FPS",        "30")),
-            frame_skip=int(os.environ.get("OPT_RECORD_FRAME_SKIP", "16")),
+            width=int(os.environ.get(envkeys.RECORD_WIDTH, "640")),
+            height=int(os.environ.get(envkeys.RECORD_HEIGHT, "480")),
+            fps=int(os.environ.get(envkeys.RECORD_FPS, "30")),
+            frame_skip=int(os.environ.get(envkeys.RECORD_FRAME_SKIP, "16")),
         )
 
     def start(self, root) -> None:

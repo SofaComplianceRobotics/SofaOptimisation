@@ -27,6 +27,22 @@ def _cached_trial_url(gen_name: str, trial_name: str) -> str | None:
     return None
 
 
+def _test_scene_file(project, trial_dir: Path) -> Path:
+    """Scene to open for a trial: the one its first run actually used.
+
+    Falls back to the project's first test when the trial state is unreadable
+    (e.g. a legacy runtime dir).
+    """
+    from sofaopt.core.trial_state import read_trial_run
+
+    run0 = read_trial_run(trial_dir / "trial_state.json", 1) or {}
+    test_name = str(run0.get("test_name", ""))
+    for t in project.tests:
+        if t.name == test_name:
+            return t.scene_file
+    return project.tests[0].scene_file
+
+
 def _spawn_test_run(project, trial_dir: Path) -> None:
     """Launch runSofa in GUI mode for a completed trial (fire and forget).
 
@@ -37,6 +53,9 @@ def _spawn_test_run(project, trial_dir: Path) -> None:
     """
     import json as _json
     import shutil as _shutil
+
+    from sofaopt.core import envkeys
+    from sofaopt.core.sofa_runner import attach_process_to_sofa_job
 
     params_path = trial_dir / "params.json"
     extra_env: dict[str, str] = {}
@@ -55,20 +74,23 @@ def _spawn_test_run(project, trial_dir: Path) -> None:
         except Exception as exc:
             print(f"[dashboard] prepare_trial for test run failed: {exc}")
 
-    scene_file = project.tests[0].scene_file
+    scene_file = _test_scene_file(project, trial_dir)
     plugins = list(project.sofa_plugins)
     if "SofaImGui" not in plugins:
         plugins.append("SofaImGui")
     cmd = [str(project.runsofa_exe)]
     for plugin in plugins:
         cmd += ["-l", plugin]
-    cmd += [str(scene_file)]
+    cmd += ["-g", "imgui", str(scene_file)]
 
     env = project.scene_env()  # os.environ + project.sofa_env
     env.update(extra_env)
-    env["OPT_PARAMS_PATH"] = str(params_path)
+    env[envkeys.PARAMS_PATH] = str(params_path)
 
-    subprocess.Popen(cmd, env=env)
+    proc = subprocess.Popen(cmd, env=env)
+    # Kill-on-close job: the viewer must not outlive the dashboard (§ no
+    # orphaned processes — every spawn path shares the same lifecycle rule).
+    attach_process_to_sofa_job(proc)
 
 
 def _spawn_summary_gen(project, summary_path: Path) -> subprocess.Popen:

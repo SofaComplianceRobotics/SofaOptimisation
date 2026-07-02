@@ -12,6 +12,7 @@ from sofaopt.core.generation.launch import _relaunch_run
 from sofaopt.core.generation.plan import prune_trial, trial_has_ungated_positive_run
 from sofaopt.core.runconfig import RunConfig
 from sofaopt.core.scoring import write_gen_summary
+from sofaopt.core.sofa_runner import active_sofa_process_count
 from sofaopt.core.state import TrialState
 from sofaopt.core.trial_state import read_trial_run, read_trial_state, update_trial_run
 from sofaopt.core.trialprep import render_preview
@@ -34,6 +35,7 @@ def finalize_generation(
     project = cfg.project
     wall_timeout = project.sofa_realtime_timeout
     max_relaunches = project.max_run_relaunches
+    max_active = project.max_active_sofa_procs
     relaunchable = {t.name for t in cfg.selected_tests if t.relaunchable}
 
     processes = launch_result["processes"]
@@ -113,10 +115,15 @@ def finalize_generation(
                                     "reason": f"exceeded {max_relaunches} probe relaunches",
                                 },
                             )
+                        elif active_sofa_process_count(processes) >= max_active:
+                            # At capacity: defer the probe relaunch to the next
+                            # scan pass instead of blocking (blocking here would
+                            # stall wall-timeout pruning of other trials).
+                            trial_has_active_run = True
                         else:
                             relaunch_counts[key] = relaunch_counts.get(key, 0) + 1
                             _relaunch_run(
-                                cfg, runs=runs,
+                                cfg, runs=runs, processes=processes,
                                 gen_index=gen_index, trial_index=trial_index,
                                 run_slot=run_slot, test_name=test_name,
                                 test_run_index=int(run_data.get("test_run_index", run_slot)),
@@ -141,13 +148,15 @@ def finalize_generation(
                 # Ungated runs are all done — open or skip the gated runs.
                 if pending_gated_runs:
                     if trial_has_ungated_positive_run(cfg, trial_state_path):
+                        if active_sofa_process_count(processes) >= max_active:
+                            continue  # at capacity: defer gated launches to next pass
                         print(
                             f"[gate] Gen {gen_index:04d} Trial {trial_index:02d} "
                             f"ungated success; launching gated tests."
                         )
                         for run_slot, t_name, t_idx, t_total in list(pending_gated_runs):
                             _relaunch_run(
-                                cfg, runs=runs,
+                                cfg, runs=runs, processes=processes,
                                 gen_index=gen_index, trial_index=trial_index,
                                 run_slot=run_slot, test_name=t_name,
                                 test_run_index=t_idx, test_run_total=t_total,

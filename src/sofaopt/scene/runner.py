@@ -21,6 +21,8 @@ import os
 import sys
 from pathlib import Path
 
+from sofaopt.core import envkeys
+
 
 def _register_sofa_dll_dirs() -> None:
     """On Windows (Python 3.8+) PATH is not used for DLL loading inside .pyd
@@ -61,7 +63,7 @@ def main(scene_path: str) -> None:
             f"and SOFA_ROOT points to the build root. ({exc})"
         ) from exc
 
-    plugins = json.loads(os.environ.get("OPT_SOFA_PLUGINS", "[]"))
+    plugins = json.loads(os.environ.get(envkeys.SOFA_PLUGINS, "[]"))
     sofa_root = os.environ.get("SOFA_ROOT", "")
     if sofa_root:
         SofaRuntime.PluginRepository.addFirstPath(str(Path(sofa_root) / "bin"))
@@ -87,7 +89,7 @@ def main(scene_path: str) -> None:
     # Frame recording — only when OPT_RECORD_FRAMES=1 is set.
     # Wrapped entirely in try/except: a recording failure must never fail the trial.
     recorder = None
-    if os.environ.get("OPT_RECORD_FRAMES") == "1":
+    if os.environ.get(envkeys.RECORD_FRAMES) == "1":
         try:
             from sofaopt.scene.frame_recorder import FrameRecorder, inject_camera_and_lights
             inject_camera_and_lights(root)   # must be before initRoot

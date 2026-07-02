@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import statistics
 import time
 from pathlib import Path
@@ -111,11 +110,16 @@ def write_progress(
     trials_done_in_gen: float,
     all_scores: list[float],
     started_at: float = 0.0,
+    total_gens: int | None = None,
 ) -> None:
-    """Write progress.json for the dashboard to poll."""
+    """Write progress.json for the dashboard to poll.
+
+    ``total_gens`` is the absolute last generation of this run (offset +
+    n_generations when resuming); without it a resumed run would report > 100%.
+    """
     project = cfg.project
     n_parallel = project.n_parallel
-    n_generations = project.n_generations
+    n_generations = total_gens if total_gens is not None else project.n_generations
 
     trials_done_in_gen = max(0.0, min(float(n_parallel), float(trials_done_in_gen)))
     total_done = (gen_index - 1) * n_parallel + trials_done_in_gen
@@ -152,4 +156,5 @@ def write_progress(
         "updated_at": time.time(),
     }
 
-    project.progress_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    # Atomic: the dashboard polls this file while the run writes it.
+    write_json(project.progress_file, payload)

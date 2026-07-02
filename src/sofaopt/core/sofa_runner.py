@@ -142,7 +142,7 @@ def launch_sofa(
 
     if project.runner == "python":
         runner_script = Path(__file__).parent.parent / "scene" / "runner.py"
-        trial_env["OPT_SOFA_PLUGINS"] = json.dumps(list(project.sofa_plugins))
+        trial_env[envkeys.SOFA_PLUGINS] = json.dumps(list(project.sofa_plugins))
         # SofaPython3 puts its Python bindings under <root>/lib/python3/site-packages.
         # When runner=="python" the subprocess is a plain Python interpreter (not
         # runSofa's bundled Python), so we must ensure those bindings are reachable.
@@ -157,11 +157,11 @@ def launch_sofa(
         if project.record_frames:
             trial_dir = trial_state_path.parent
             w, h = project.record_frame_size
-            trial_env["OPT_RECORD_FRAMES"] = "1"
-            trial_env["OPT_RECORD_OUTPUT"] = str(trial_dir / "trial.mp4")
-            trial_env["OPT_RECORD_FRAME_SKIP"] = str(project.record_frame_skip)
-            trial_env["OPT_RECORD_WIDTH"] = str(w)
-            trial_env["OPT_RECORD_HEIGHT"] = str(h)
+            trial_env[envkeys.RECORD_FRAMES] = "1"
+            trial_env[envkeys.RECORD_OUTPUT] = str(trial_dir / "trial.mp4")
+            trial_env[envkeys.RECORD_FRAME_SKIP] = str(project.record_frame_skip)
+            trial_env[envkeys.RECORD_WIDTH] = str(w)
+            trial_env[envkeys.RECORD_HEIGHT] = str(h)
         cmd = [sys.executable, str(runner_script), str(scene_file)]
     else:
         if project.runsofa_exe is None:
@@ -215,11 +215,21 @@ def active_sofa_process_count(processes: list[tuple]) -> int:
 
 
 def wait_for_slot(
-    processes: list[tuple], limit: int, gen_index: int, trial_index: int
+    processes: list[tuple],
+    limit: int,
+    gen_index: int,
+    trial_index: int,
+    timeout_s: float | None = None,
 ) -> None:
-    """Block until the active SOFA process count drops below ``limit``."""
+    """Block until the active SOFA process count drops below ``limit``.
+
+    ``timeout_s`` is a backstop: if every active process is wedged (they will
+    be pruned only once the finalize loop runs), proceeding after the timeout
+    briefly exceeds the cap instead of deadlocking the launch phase.
+    """
     if limit <= 0:
         return
+    deadline = None if timeout_s is None else time.time() + timeout_s
     warned = False
     while active_sofa_process_count(processes) >= limit:
         if not warned:
@@ -228,4 +238,10 @@ def wait_for_slot(
                 f"waiting for active SOFA < {limit}"
             )
             warned = True
+        if deadline is not None and time.time() > deadline:
+            print(
+                f"[throttle] Gen {gen_index:04d} Trial {trial_index:02d} "
+                f"waited {timeout_s:.0f}s with no free slot; launching anyway (backstop)"
+            )
+            return
         time.sleep(0.2)

@@ -61,10 +61,14 @@ def generation_progress_writer(
     all_scores: list[float],
     stop_event: threading.Event,
     started_at: float = 0.0,
+    total_gens: int | None = None,
 ) -> None:
     """Write progress.json on a fixed interval until ``stop_event`` is set."""
     n_parallel = cfg.project.n_parallel
     while not stop_event.is_set():
         frac = generation_progress_fraction(trial_state_paths_by_trial)
-        write_progress(cfg, gen_index, frac * n_parallel, all_scores, started_at)
+        write_progress(
+            cfg, gen_index, frac * n_parallel, all_scores, started_at,
+            total_gens=total_gens,
+        )
         stop_event.wait(GEN_PROGRESS_POLL_INTERVAL)

@@ -164,7 +164,7 @@ def load_gen_summaries() -> list[dict]:
         if not summary_path.exists():
             continue
         try:
-            data = json.loads(summary_path.read_text())
+            data = json.loads(summary_path.read_text(encoding="utf-8"))
             summaries.append(
                 {
                     "gen_index": data["gen"],

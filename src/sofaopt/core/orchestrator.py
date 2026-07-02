@@ -6,6 +6,7 @@ import dataclasses
 import os
 import sys
 import time
+from pathlib import Path
 
 from sofaopt.core import envkeys
 from sofaopt.core.algorithm import build_study
@@ -46,6 +47,17 @@ def _apply_env_overrides(project: SofaOptProject) -> SofaOptProject:
         return project
     print(f"[override] Applying env optimizer overrides: {overrides}")
     return dataclasses.replace(project, **overrides)
+
+
+def _last_gen_index(trials_dir: Path) -> int:
+    """Highest generation number present on disk (0 when none)."""
+    last = 0
+    for d in trials_dir.glob("gen_*"):
+        try:
+            last = max(last, int(d.name.split("_")[1]))
+        except (IndexError, ValueError):
+            continue
+    return last
 
 
 def _post_run_video(project: SofaOptProject) -> None:
@@ -106,10 +118,11 @@ def run_optimization(
 
     study = build_study(project.db_path, cfg, resume=resuming)
 
-    # When resuming, offset the generation counter so numbering continues from
-    # where the previous run left off instead of restarting at 1.
-    completed_trials = len([t for t in study.trials if t.state.name == "COMPLETE"])
-    completed_gens   = completed_trials // max(1, project.n_parallel)
+    # When resuming, continue generation numbering from the dirs actually on
+    # disk. (Counting COMPLETE Optuna trials under-counts when a previous run
+    # was killed mid-generation or trials were pruned, which made a resumed run
+    # reuse — and overwrite — existing gen_XXXX directories.)
+    gen_offset = _last_gen_index(project.trials_dir) if resuming else 0
 
     env = cfg.base_scene_env()
     state = TrialState()
@@ -117,15 +130,15 @@ def run_optimization(
     started_at = time.time()
     _prune_count = 0  # tracks how many periodic prunes have fired (trial-count based)
 
-    for gen in range(completed_gens + 1, completed_gens + project.n_generations + 1):
+    total_gens = gen_offset + project.n_generations
+    for gen in range(gen_offset + 1, total_gens + 1):
         state.advance_gen()
-        write_progress(cfg, gen, 0, state.all_scores, started_at)
+        write_progress(cfg, gen, 0, state.all_scores, started_at, total_gens=total_gens)
 
-        total_gens = completed_gens + project.n_generations
         print(f"\n{'=' * 50}\nGeneration {gen}/{total_gens}\n{'=' * 50}")
 
         trials = [study.ask() for _ in range(project.n_parallel)]
-        run_generation(cfg, gen, trials, study, env, state, started_at)
+        run_generation(cfg, gen, trials, study, env, state, started_at, total_gens=total_gens)
 
         if project.record_frames:
             try:

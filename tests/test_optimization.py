@@ -4,13 +4,15 @@ Covers the sampler wiring (CMA-ES-with-Margin, GP-BO, Sobol seeding) and the
 interaction-analysis module (fANOVA main effects + surrogate interaction map).
 
 Run with ``pytest`` from the repo root, or directly: ``python tests/test_optimization.py``.
-Requires only optuna + scikit-learn (already framework deps); no SOFA needed.
+No SOFA needed. The interaction-analysis tests need scikit-learn (the
+``[analysis]`` extra) and skip cleanly when it is not installed.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import optuna
+import pytest
 
 import sofaopt.analysis as an
 from sofaopt.core import algorithm as alg
@@ -61,6 +63,7 @@ def _coupled_study(n_trials=120, seed=0):
 
 def test_interaction_map_recovers_coupling():
     """The a*b pair must be the strongest interaction in the matrix."""
+    pytest.importorskip("sklearn", reason="needs the [analysis] extra")
     report = an.analyze(_coupled_study(), method="h_stat")
     assert set(report.param_names) == {"a", "b", "c"}
     top = report.top_interactions(3)
@@ -70,6 +73,7 @@ def test_interaction_map_recovers_coupling():
 
 
 def test_main_effects_present_and_normalized():
+    pytest.importorskip("sklearn", reason="needs the [analysis] extra")
     report = an.analyze(_coupled_study(), method="h_stat")
     me = report.main_effects
     assert set(me) == {"a", "b", "c"}

@@ -96,7 +96,13 @@ def launch_scene(scene_file: Path, extra_env: dict | None = None, gui: str = "im
         cmd += ["-l", plugin]
     cmd += ["-g", gui, str(scene_file)]
     try:
+        from sofaopt.core.sofa_runner import attach_process_to_sofa_job
+
         proc = subprocess.Popen(cmd, env=env, cwd=str(project.work_dir))
+        # Viewer windows must not outlive the dashboard (kill-on-close job).
+        # The headless optimize run is intentionally NOT attached: a long run
+        # must survive closing the dashboard; it owns its own job for children.
+        attach_process_to_sofa_job(proc)
         return f"Launched SOFA (PID {proc.pid})."
     except Exception as exc:
         return f"Failed to launch: {exc}"

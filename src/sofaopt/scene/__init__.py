@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any
 
 from sofaopt.core import envkeys
+from sofaopt.core.io import update_json_locked
+from sofaopt.core.trial_state import patch_run_slot
 
 
 @dataclass
@@ -209,65 +211,17 @@ class ScoreWriter:
                 pass
         return time.time()
 
-    def _acquire_lock(self, lock_path: Path, timeout_s: float = 5.0) -> bool:
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
-            try:
-                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.close(fd)
-                return True
-            except FileExistsError:
-                time.sleep(0.01)
-            except Exception:
-                return False
-        return False
-
-    def _release_lock(self, lock_path: Path) -> None:
-        try:
-            if lock_path.exists():
-                lock_path.unlink()
-        except Exception:
-            pass
-
     def _update_trial_state_run(self, payload: dict[str, Any]) -> bool:
         if self.trial_state_path is None:
             return False
         path = Path(self.trial_state_path)
-        lock_path = path.with_suffix(path.suffix + ".lock")
-        if not self._acquire_lock(lock_path):
-            return False
-        try:
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if not isinstance(data, dict):
-                    data = {}
-            except Exception:
-                data = {}
-
-            runs = data.get("runs")
-            if not isinstance(runs, list):
-                runs = []
-            # run_slot is 1-based; clamp for standalone runs (runSofa GUI) where OPT_RUN_SLOT is unset (0)
-            slot_no = self.run_slot if self.run_slot >= 1 else 1
-            while len(runs) < slot_no:
-                runs.append({"run": len(runs) + 1})
-
-            slot = runs[slot_no - 1]
-            if not isinstance(slot, dict):
-                slot = {"run": slot_no}
-            slot.update(payload)
-            slot["run"] = slot_no
-            slot["updated_at"] = self._now()
-            runs[slot_no - 1] = slot
-
-            data["runs"] = runs
-            data["updated_at"] = self._now()
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            tmp.replace(path)
-            return True
-        finally:
-            self._release_lock(lock_path)
+        # run_slot is 1-based; clamp for standalone runs (runSofa GUI) where OPT_RUN_SLOT is unset (0)
+        slot_no = self.run_slot if self.run_slot >= 1 else 1
+        update_json_locked(
+            path,
+            lambda data: patch_run_slot(data, slot_no, payload, now=self._now()),
+        )
+        return True
 
     def write_status(self, payload: dict[str, Any], *, min_interval: float = 0.0) -> None:
         """Best-effort live-status write (errors swallowed so they never kill the sim)."""

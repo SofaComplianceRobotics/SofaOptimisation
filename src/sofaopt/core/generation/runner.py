@@ -22,6 +22,7 @@ def run_generation(
     env: dict,
     state: TrialState,
     started_at: float = 0.0,
+    total_gens: int | None = None,
 ) -> None:
     """Run one CMA-ES generation end to end."""
     project = cfg.project
@@ -49,7 +50,7 @@ def run_generation(
     progress_stop = threading.Event()
     progress_thread = threading.Thread(
         target=generation_progress_writer,
-        args=(cfg, gen_index, trial_state_paths_by_trial, state.all_scores, progress_stop, started_at),
+        args=(cfg, gen_index, trial_state_paths_by_trial, state.all_scores, progress_stop, started_at, total_gens),
         daemon=True,
     )
     progress_thread.start()

@@ -16,6 +16,16 @@ GEN = "OPT_GEN"                            # generation number
 TRIAL = "OPT_TRIAL"                        # trial number within the generation
 RUN = "OPT_RUN"                            # global run number within the trial
 
+# Python-runner setup + in-run frame recording (set by launch_sofa when
+# runner="python"; read by scene/runner.py and scene/frame_recorder.py):
+SOFA_PLUGINS = "OPT_SOFA_PLUGINS"          # JSON list of plugin names to load
+RECORD_FRAMES = "OPT_RECORD_FRAMES"        # "1" to enable in-run recording
+RECORD_OUTPUT = "OPT_RECORD_OUTPUT"        # target .mp4 path
+RECORD_WIDTH = "OPT_RECORD_WIDTH"          # capture width (px)
+RECORD_HEIGHT = "OPT_RECORD_HEIGHT"        # capture height (px)
+RECORD_FPS = "OPT_RECORD_FPS"              # output video fps
+RECORD_FRAME_SKIP = "OPT_RECORD_FRAME_SKIP"  # capture every Nth sim step
+
 # Selection/weights forwarded so any child can reconstruct them (optional use):
 SELECTED_TESTS = "OPT_SELECTED_TESTS"      # comma-separated test names
 TEST_WEIGHTS = "OPT_TEST_WEIGHTS"          # JSON {name: int percent}

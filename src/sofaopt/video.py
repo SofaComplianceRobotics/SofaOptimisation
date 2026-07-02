@@ -651,6 +651,7 @@ def generate_summary_video(
     top_n: int = 3,
     bottom_n: int = 2,
     test_name: str | None = None,
+    clip_steps: int | None = None,
     **video_kwargs,
 ) -> None:
     """Generate a single highlight-reel MP4 from the best and worst trials.
@@ -667,6 +668,9 @@ def generate_summary_video(
         output_path: Output MP4 path.
         top_n:       Number of highest-scoring trials to include.
         bottom_n:    Number of lowest-scoring trials to include.
+        clip_steps:  Max sim steps per re-rendered clip (mapped to
+                     ``generate_trial_video(max_steps=...)``; ignored for
+                     cached recordings).
         **video_kwargs: Forwarded to ``generate_trial_video()`` when re-rendering
                         (crf, preset, frame_skip, width, height, fps, text_overlay, ...).
     """
@@ -773,6 +777,7 @@ def generate_summary_video(
                     trial_dir,
                     clip_out,
                     test_name=test_name,
+                    max_steps=clip_steps,
                     crf=crf,
                     preset=preset,
                     text_overlay=text_overlay,
