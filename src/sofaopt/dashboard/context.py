@@ -16,7 +16,6 @@ from sofaopt.project import SofaOptProject, TestSpec
 TOP_X = 10  # leaderboard length
 CENTERED_AVG_HALF_WINDOW = 10  # rolling-average half window
 LIVE_REFRESH_SECONDS = 2.0  # live polling interval
-SCORE_AGGREGATION = "mean"
 
 _PROJECT: SofaOptProject | None = None
 

@@ -26,25 +26,16 @@ def _test_color(test_name: str, name_order: list[str]) -> str:
 
 
 def _compute_contributions(record: dict) -> dict[str, float]:
-    """Per-test weighted contribution for one trial: ``normalize(agg) * weight_pct``."""
-    test_scores: dict = record.get("test_scores") or {}
-    if not test_scores:
-        return {"score": float(record.get("final_score", record.get("score", 0.0)))}
+    """Per-test contribution for one trial, as recorded by the optimizer.
 
-    contributions: dict[str, float] = {}
-    for test_name, test_info in test_scores.items():
-        if not isinstance(test_info, dict):
-            continue
-        agg = float(test_info.get("aggregate_score", 0.0) or 0.0)
-        raw_max = test_info.get("max_score")
-        max_score = float(raw_max) if raw_max is not None else 1.0
-        wpct = float(test_info.get("weight_pct", 0.0) or 0.0)
-        norm = min(agg / max_score, 1.0) if max_score > 0 else 0.0
-        contributions[test_name] = norm * wpct
-
-    return contributions or {
-        "score": float(record.get("final_score", record.get("score", 0.0)))
-    }
+    Computed once in :mod:`sofaopt.core.results` from the recorded normalized
+    scores and gate-renormalized weights, so the stack sums to the study's
+    final score — the dashboard never recomputes its own.
+    """
+    contributions = record.get("contributions")
+    if isinstance(contributions, dict) and contributions:
+        return contributions
+    return {"score": float(record.get("final_score", record.get("score", 0.0)) or 0.0)}
 
 
 def compute_plot_data(records: list[dict], all_test_names: list[str]) -> dict:
@@ -52,7 +43,8 @@ def compute_plot_data(records: list[dict], all_test_names: list[str]) -> dict:
     half = context.CENTERED_AVG_HALF_WINDOW
     xs = [r["chron"] for r in records]
     contributions = [_compute_contributions(r) for r in records]
-    final_scores = [sum(c.values()) for c in contributions]
+    # The recorded study score — identical to what the leaderboard shows.
+    final_scores = [float(r.get("final_score", 0.0) or 0.0) for r in records]
     failed_mask = [bool(r.get("failed", False)) for r in records]
     is_complete = [bool(r.get("is_complete", True)) for r in records]
 
@@ -60,7 +52,7 @@ def compute_plot_data(records: list[dict], all_test_names: list[str]) -> dict:
     for i, r in enumerate(records):
         lo = max(0, i - half)
         hi = min(len(records) - 1, i + half)
-        scores = [sum(_compute_contributions(w).values()) for w in records[lo : hi + 1]]
+        scores = final_scores[lo : hi + 1]
         avg_x.append(r["chron"])
         avg_y.append(sum(scores) / len(scores))
 
@@ -82,8 +74,7 @@ def compute_plot_data(records: list[dict], all_test_names: list[str]) -> dict:
             lo = max(0, i - half)
             hi = min(len(records) - 1, i + half)
             window_scores = [
-                _compute_contributions(records[k]).get(test_name, 0.0)
-                for k in range(lo, hi + 1)
+                contributions[k].get(test_name, 0.0) for k in range(lo, hi + 1)
             ]
             avg_x_t.append(r["chron"])
             avg_y_t.append(sum(window_scores) / len(window_scores))

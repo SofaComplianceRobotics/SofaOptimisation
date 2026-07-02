@@ -538,16 +538,10 @@ def generate_trial_video(
 # ---------------------------------------------------------------------------
 
 def _rank_trials(project) -> list[dict]:
-    """Return all completed trial records sorted best→worst by final_score."""
-    from sofaopt.dashboard import context as _ctx
-    from sofaopt.dashboard.analyze_io import load_all_trials
-    _ctx.set_project(project)
-    records = load_all_trials()
-    return sorted(
-        (r for r in records if r.get("is_complete") and r.get("final_score") is not None),
-        key=lambda r: r["final_score"],
-        reverse=True,
-    )
+    """All completed trial records, best→worst by the *recorded* final score."""
+    from sofaopt.core.results import load_trial_records, rank_completed
+
+    return rank_completed(load_trial_records(project.trials_dir))
 
 
 def generate_selected_videos(
