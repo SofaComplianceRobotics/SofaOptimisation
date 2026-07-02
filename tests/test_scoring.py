@@ -224,6 +224,33 @@ def test_params_from_trial_frozen_uses_default_and_is_not_suggested():
     assert "frozen" not in trial.params
 
 
+# ---------------------------------------------------------------------------
+# project JSON round-trip (subprocess handoff, replaces pickle)
+# ---------------------------------------------------------------------------
+
+def test_project_json_roundtrip_drops_hooks_and_keeps_fields():
+    import json
+
+    from sofaopt.project import project_from_jsonable, project_to_jsonable
+
+    project = _project(
+        prepare_trial=lambda params, d: None,
+        record_frames=True,
+        record_frame_size=(320, 240),
+    )
+    payload = json.loads(json.dumps(project_to_jsonable(project)))  # real JSON trip
+    rebuilt = project_from_jsonable(payload)
+
+    assert rebuilt.prepare_trial is None  # hooks cannot cross the boundary
+    assert rebuilt.name == project.name
+    assert rebuilt.work_dir == project.work_dir
+    assert rebuilt.record_frame_size == (320, 240)
+    assert [t.name for t in rebuilt.tests] == ["cheap", "expensive"]
+    assert rebuilt.tests[1].gated is True
+    assert [p.name for p in rebuilt.params] == ["a", "frozen", "flag"]
+    assert rebuilt.params[0].default == 0.5
+
+
 def test_params_from_trial_constrain_hook_applies():
     import optuna
 

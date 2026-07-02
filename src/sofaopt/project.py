@@ -355,6 +355,77 @@ class SofaOptProject:
         return env
 
 
+def load_project_file(project_path: Path | str, attr: str = "PROJECT") -> SofaOptProject:
+    """Load a :class:`SofaOptProject` from a user ``project.py`` file.
+
+    The file must assign ``PROJECT = SofaOptProject(...)`` (or ``attr``).
+    Used by the video CLI and subprocess entry points.
+    """
+    import importlib.util
+
+    project_path = Path(project_path)
+    spec = importlib.util.spec_from_file_location("_sofaopt_project", project_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load project file: {project_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    if not hasattr(mod, attr):
+        raise AttributeError(
+            f"{project_path} does not define a {attr} variable. "
+            f"Make sure the file assigns: {attr} = SofaOptProject(...)"
+        )
+    return getattr(mod, attr)
+
+
+def _spec_to_jsonable(spec: Any) -> dict[str, Any]:
+    from dataclasses import fields as _fields
+
+    return {
+        f.name: (str(v) if isinstance(v, Path) else v)
+        for f in _fields(spec)
+        for v in [getattr(spec, f.name)]
+    }
+
+
+def project_to_jsonable(project: SofaOptProject) -> dict[str, Any]:
+    """JSON-safe dict for handing a project to a subprocess.
+
+    Hooks (``prepare_trial``, ``constrain_params``, ``on_generation_end``)
+    cannot cross a process boundary and are dropped. This is the sanctioned
+    replacement for pickling the project (§9: no pickle for IPC).
+    """
+    from dataclasses import fields as _fields
+
+    out: dict[str, Any] = {}
+    for f in _fields(project):
+        v = getattr(project, f.name)
+        if v is not None and callable(v):
+            continue  # hook — not serializable, receiver runs hook-free
+        if isinstance(v, Path):
+            v = str(v)
+        elif f.name in ("params", "tests"):
+            v = [_spec_to_jsonable(s) for s in v]
+        elif isinstance(v, Mapping):
+            v = {k: str(val) for k, val in v.items()}
+        elif isinstance(v, tuple):
+            v = list(v)
+        out[f.name] = v
+    return out
+
+
+def project_from_jsonable(data: Mapping[str, Any]) -> SofaOptProject:
+    """Rebuild a (hook-free) :class:`SofaOptProject` from :func:`project_to_jsonable`."""
+    kwargs = dict(data)
+    kwargs["params"] = [ParamSpec(**p) for p in kwargs.get("params", [])]
+    kwargs["tests"] = [TestSpec(**t) for t in kwargs.get("tests", [])]
+    for key in ("work_dir", "runsofa_exe", "run_script", "config_file", "failed_preview_image"):
+        if kwargs.get(key):
+            kwargs[key] = Path(kwargs[key])
+    if "record_frame_size" in kwargs:
+        kwargs["record_frame_size"] = tuple(kwargs["record_frame_size"])
+    return SofaOptProject(**kwargs)
+
+
 def param_specs_from_dataclass(instance: Any) -> list[ParamSpec]:
     """Build :class:`ParamSpec` list from a dataclass with ``opt`` field metadata.
 

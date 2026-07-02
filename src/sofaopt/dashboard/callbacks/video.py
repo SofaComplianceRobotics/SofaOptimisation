@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import dataclasses
 import os
-import pickle
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 from dash import Input, Output, State, html
@@ -94,81 +91,29 @@ def _spawn_test_run(project, trial_dir: Path) -> None:
 
 
 def _spawn_summary_gen(project, summary_path: Path) -> subprocess.Popen:
-    """Spawn summary video generation as a background subprocess."""
-    stripped = dataclasses.replace(
-        project,
-        prepare_trial=None,
-        constrain_params=None,
-        on_generation_end=None,
-    )
-    tmp_dir = Path(tempfile.mkdtemp(prefix="sofaopt_sumgen_"))
-    pkl_file = tmp_dir / "project.pkl"
-    pkl_file.write_bytes(pickle.dumps(stripped))
+    """Spawn summary video generation as a background subprocess.
 
-    script = tmp_dir / "gen.py"
-    script.write_text(
-        f"""
-import os, sys, pickle, shutil
-from pathlib import Path
-print("[summary-gen] Script started", flush=True)
+    The project is handed over as JSON (hooks dropped by serialization) to a
+    real entry point — ``python -m sofaopt.video.summary_entry`` — which owns
+    the SOFA bootstrap and cleans the args file up itself. No pickle (§9),
+    no generated script, no temp-dir leak.
+    """
+    import json as _json
 
-try:
-    _sofa_root = os.environ.get('SOFA_ROOT', '') or os.environ.get('SOFAPYTHON3_ROOT', '')
-    if not _sofa_root:
-        for _pp in os.environ.get('PYTHONPATH', '').split(os.pathsep):
-            _pp = _pp.strip()
-            if not _pp:
-                continue
-            _pp_path = Path(_pp)
-            try:
-                _has_sofa = (_pp_path / 'Sofa').is_dir() or bool(list(_pp_path.glob('Sofa*.pyd'))[:1])
-            except (OSError, PermissionError):
-                _has_sofa = False
-            if _has_sofa:
-                for _up in [_pp_path.parent.parent.parent, _pp_path.parent.parent]:
-                    if (_up / 'bin').is_dir() or (_up / 'bin' / 'Release').is_dir():
-                        _sofa_root = str(_up)
-                        break
-            if _sofa_root:
-                break
-    if _sofa_root and os.name == 'nt' and hasattr(os, 'add_dll_directory'):
-        for _d in [Path(_sofa_root) / 'bin' / 'Release', Path(_sofa_root) / 'bin']:
-            if _d.is_dir():
-                os.add_dll_directory(str(_d))
-                print(f"[summary-gen] DLL dir registered: {{_d}}", flush=True)
-                break
-    if _sofa_root and not os.environ.get('SOFA_ROOT'):
-        os.environ['SOFA_ROOT'] = _sofa_root
-        print(f"[summary-gen] Set SOFA_ROOT = {{_sofa_root}}", flush=True)
-    import importlib.util as _ilu
-    if _ilu.find_spec('Sofa') is None and _sofa_root:
-        for _sp in [
-            Path(_sofa_root) / 'lib' / 'python3' / 'site-packages',
-            Path(_sofa_root) / 'lib' / f'python{{sys.version_info.major}}.{{sys.version_info.minor}}' / 'site-packages',
-        ]:
-            if _sp.is_dir():
-                sys.path.insert(0, str(_sp))
-                print(f"[summary-gen] Added to sys.path: {{_sp}}", flush=True)
-                break
-    print(f"[summary-gen] SOFA root: {{_sofa_root or '(not found)'}}", flush=True)
-except Exception as _e:
-    print(f"[summary-gen] Bootstrap warning: {{_e}}", flush=True)
+    from sofaopt.project import project_to_jsonable
 
-project = pickle.loads(Path({str(pkl_file)!r}).read_bytes())
-print("[summary-gen] Project loaded, generating summary ...", flush=True)
-from sofaopt.video import generate_summary_video
-generate_summary_video(
-    project,
-    {str(summary_path)!r},
-    top_n=project.record_summary_top_n,
-    bottom_n=project.record_summary_bottom_n,
-    text_overlay=True,
-)
-print("[summary-gen] Done.", flush=True)
-shutil.rmtree({str(tmp_dir)!r}, ignore_errors=True)
-# Avoid SOFA Py_FinalizeEx crash on Windows (same fix as scene/runner.py).
-sys.stdout.flush(); sys.stderr.flush(); os._exit(0)
-""",
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    args_file = summary_path.parent / "summary_gen_args.json"
+    args_file.write_text(
+        _json.dumps(
+            {
+                "project": project_to_jsonable(project),
+                "summary_path": str(summary_path),
+                "top_n": project.record_summary_top_n,
+                "bottom_n": project.record_summary_bottom_n,
+            },
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
@@ -176,17 +121,19 @@ sys.stdout.flush(); sys.stderr.flush(); os._exit(0)
     env.update({k: str(v) for k, v in project.sofa_env.items()})
     log_path = summary_path.parent / "summary_gen.log"
     log_fh = open(log_path, "w", encoding="utf-8", errors="replace")
-    _popen_kwargs: dict = {"stdin": subprocess.DEVNULL}
+    popen_kwargs: dict = {"stdin": subprocess.DEVNULL}
     if os.name == "nt":
-        _popen_kwargs["creationflags"] = (
+        # CREATE_NEW_PROCESS_GROUP: keep Ctrl+C in the dashboard terminal from
+        # propagating into the render child; CREATE_NO_WINDOW: no console flash.
+        popen_kwargs["creationflags"] = (
             subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
         )
     proc = subprocess.Popen(
-        [sys.executable, str(script)],
+        [sys.executable, "-m", "sofaopt.video.summary_entry", str(args_file)],
         env=env,
         stdout=log_fh,
         stderr=subprocess.STDOUT,
-        **_popen_kwargs,
+        **popen_kwargs,
     )
     log_fh.close()
     return proc

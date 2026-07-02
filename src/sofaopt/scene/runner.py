@@ -22,36 +22,18 @@ import sys
 from pathlib import Path
 
 from sofaopt.core import envkeys
-
-
-def _register_sofa_dll_dirs() -> None:
-    """On Windows (Python 3.8+) PATH is not used for DLL loading inside .pyd
-    extension modules. SOFA's DLLs must be registered explicitly with
-    os.add_dll_directory() before the first SofaRuntime import."""
-    if os.name != "nt" or not hasattr(os, "add_dll_directory"):
-        return
-    sofa_root = os.environ.get("SOFA_ROOT", "")
-    if not sofa_root:
-        return
-    sofa_root_path = Path(sofa_root)
-    candidates = [
-        sofa_root_path / "bin" / "Release",
-        sofa_root_path / "bin",
-    ]
-    for candidate in candidates:
-        if candidate.is_dir():
-            os.add_dll_directory(str(candidate))
+from sofaopt.core.sofa_bootstrap import (
+    reconfigure_streams_utf8,
+    register_sofa_dll_dirs,
+)
 
 
 def main(scene_path: str) -> None:
     # Windows console uses cp1252 by default; SOFA and pygame may print non-ASCII.
-    for _s in (sys.stdout, sys.stderr):
-        try:
-            _s.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+    reconfigure_streams_utf8()
 
-    _register_sofa_dll_dirs()
+    # Must run before the first SofaRuntime import (Windows DLL search rules).
+    register_sofa_dll_dirs()
     try:
         import SofaRuntime
         import Sofa.Core
