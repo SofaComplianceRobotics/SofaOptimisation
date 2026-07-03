@@ -134,7 +134,7 @@ def generate_summary_video(
     top_n: int = 3,
     bottom_n: int = 2,
     test_name: str | None = None,
-    clip_steps: int | None = None,
+    clip_steps: int | None = 5000,
     **video_kwargs,
 ) -> None:
     """Generate a single highlight-reel MP4 from the best and worst trials.

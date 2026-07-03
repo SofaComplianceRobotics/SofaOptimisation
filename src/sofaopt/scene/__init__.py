@@ -60,13 +60,24 @@ class Trial:
         return {"gen": self.gen, "trial": self.trial, "run": self.run}
 
     def attach(self, rootnode) -> "Trial":
-        """Bind a SOFA root so writes timestamp with sim time and can stop it."""
-        self._writer = ScoreWriter(
-            rootnode,
-            run_info=self.run_info,
-            trial_state_path=self.trial_state_path,
-            run_slot=self.run_slot,
-        )
+        """Bind a SOFA root so writes timestamp with sim time and can stop it.
+
+        Keeps an existing writer (a scene may score before attaching): the root
+        is bound onto it, and if it already scored the scene is stopped now —
+        replacing the writer here used to discard that state and leave a
+        non-optimizing run (e.g. a video re-render) animating forever.
+        """
+        if self._writer is None:
+            self._writer = ScoreWriter(
+                rootnode,
+                run_info=self.run_info,
+                trial_state_path=self.trial_state_path,
+                run_slot=self.run_slot,
+            )
+        else:
+            self._writer.rootnode = rootnode
+            if self._writer.finished:
+                self._writer._stop()
         return self
 
     def _ensure_writer(self) -> "ScoreWriter":

@@ -231,8 +231,21 @@ def generate_trial_video(
     root.animate = True  # Sofa.Core.Node starts with animate=False
 
     pygame.display.init()
-    pygame.display.set_mode((width, height), pygame.DOUBLEBUF | pygame.OPENGL)
+    # HIDDEN like frame_recorder: rendering only reads the back buffer (no swap), so the
+    # window surface is never shown — without this the render window pops up on the desktop.
+    pygame.display.set_mode(
+        (width, height),
+        pygame.DOUBLEBUF | pygame.OPENGL | pygame.NOFRAME | getattr(pygame, "HIDDEN", 0),
+    )
     pygame.display.set_caption("sofaopt video render")
+    if os.name == "nt":
+        try:
+            import ctypes
+            hwnd = pygame.display.get_wm_info().get("window", 0)
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+        except Exception:
+            pass
 
     Sofa.SofaGL.glewInit()
     Sofa.Simulation.initVisual(root)
