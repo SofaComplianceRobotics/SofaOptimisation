@@ -293,6 +293,13 @@ random** within each parameter's bounds; only afterwards does the CMA-ES
 algorithm take over. CMA-ES needs a handful of evaluated points before its
 covariance estimate means anything — this warm-up provides them.
 
+**Default is now `None` = auto-sized from dimensionality**
+(`project.resolve_startup_trials()`): the power of two nearest to `5·d`
+(CMA-ES) or `10·d` (GP-BO), with `d` = searched (non-frozen) params — powers
+of two because the Sobol' design is exactly balanced there. Adding or freezing
+parameters rescales the exploration phase automatically; set an explicit int
+to override.
+
 - It's effectively *"how many random trials first."* Because a generation is
   `n_parallel` trials, setting it to `K × n_parallel` gives roughly **K fully
   random generations** before CMA-ES engages.

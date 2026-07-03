@@ -66,7 +66,7 @@ The search is **CMA-ES** (via Optuna). A few fields on `SofaOptProject` control 
 |-------|---------|--------------|
 | `n_parallel` | 5 | CMA-ES population size — candidates per generation, run as parallel `runSofa` processes. |
 | `n_generations` | 100 | How many generations to run. |
-| `cmaes_startup_trials` | 50 | **Random startup phase** (see below). |
+| `cmaes_startup_trials` | auto | **Random startup phase** (see below). `None` auto-sizes from the number of searched params (`resolve_startup_trials()`). |
 | `cmaes_sigma0` | 1.0 | Initial spread (std-dev) of the search once CMA-ES begins. |
 
 **Random startup phase.** CMA-ES needs a few evaluated points before its model is

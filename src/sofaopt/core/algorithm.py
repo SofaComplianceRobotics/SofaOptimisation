@@ -69,6 +69,14 @@ def build_study(db_path: Path, cfg: RunConfig, resume: bool = False) -> optuna.S
             load_if_exists=resume,
         )
 
+    startup_trials = project.resolve_startup_trials()
+    if project.cmaes_startup_trials is None and project.sampler in ("cmaes", "gp"):
+        searched = sum(1 for p in project.params if not p.is_frozen)
+        logger.info(
+            f"[sampler] startup trials auto-sized to {startup_trials} "
+            f"({searched} searched params, sampler={project.sampler})"
+        )
+
     if project.sampler == "cmaes":
         # Center the search on the ParamSpec defaults (the documented contract).
         # Only float/int non-frozen params are in the CMA-ES space; bools are
@@ -82,14 +90,14 @@ def build_study(db_path: Path, cfg: RunConfig, resume: bool = False) -> optuna.S
             x0=x0 or None,
             sigma0=project.cmaes_sigma0,
             popsize=project.n_parallel,
-            n_startup_trials=project.cmaes_startup_trials,
+            n_startup_trials=startup_trials,
             consider_pruned_trials=True,
             with_margin=project.cmaes_with_margin,
             independent_sampler=_seed_sampler(project),
         )
     elif project.sampler == "gp":
         sampler = optuna.samplers.GPSampler(
-            n_startup_trials=project.cmaes_startup_trials,
+            n_startup_trials=startup_trials,
             independent_sampler=_seed_sampler(project),
         )
     elif project.sampler == "tpe":

@@ -219,7 +219,11 @@ class SofaOptProject:
     n_parallel: int = 5
     n_generations: int = 100
     cmaes_sigma0: float = 1.0
-    cmaes_startup_trials: int = 50
+    cmaes_startup_trials: int | None = None
+    """Number of space-filling startup trials before the model-based sampler
+    takes over. ``None`` (default) auto-sizes from the number of searched
+    parameters — see :meth:`resolve_startup_trials` — so adding/freezing
+    parameters rescales the exploration phase automatically."""
     sampler: Literal["cmaes", "tpe", "random", "gp"] = "cmaes"
     """Optuna sampler: ``"cmaes"`` (default), ``"tpe"`` (Bayesian TPE),
     ``"random"``, or ``"gp"`` (Gaussian-process Bayesian optimization, the
@@ -323,6 +327,24 @@ class SofaOptProject:
             )
 
     # --- derived runtime paths --------------------------------------------
+    def resolve_startup_trials(self) -> int:
+        """Startup design size: the explicit value, or auto from dimensionality.
+
+        Auto = the power of two nearest (in log2) to ``k*d``, where ``d`` is the
+        number of searched (non-frozen) params and ``k`` is 5 for CMA-ES (only
+        needs a coverage map) or 10 for GP-BO (must fit a surrogate; the
+        classic 10*d rule). Powers of two because the Sobol' startup design is
+        exactly balanced there. Examples (cmaes): d=6 -> 32, d=9 -> 32,
+        d=12 -> 64; (gp): d=6 -> 64.
+        """
+        if self.cmaes_startup_trials is not None:
+            return self.cmaes_startup_trials
+        import math
+
+        d = max(1, sum(1 for p in self.params if not p.is_frozen))
+        k = 10 if self.sampler == "gp" else 5
+        return 2 ** max(3, round(math.log2(k * d)))
+
     @property
     def runtime_dir(self) -> Path:
         return self.work_dir / "runtime"
