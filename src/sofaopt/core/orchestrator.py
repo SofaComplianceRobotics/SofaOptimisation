@@ -33,13 +33,17 @@ logger = logging.getLogger(__name__)
 _TERMINAL_STATES = ("done", "failed", "pruned", "interrupted", "cached")
 
 
-def _mark_interrupted_on_disk(trials_dir: Path, gen_index: int) -> None:
+def _mark_interrupted_on_disk(trials_dir: Path) -> None:
     """Close out trial states a killed run left non-terminal (the dashboard
-    otherwise shows them as running forever)."""
-    gen_dir = trials_dir / f"gen_{gen_index:04d}"
-    if gen_index <= 0 or not gen_dir.is_dir():
-        return
-    for tdir in sorted(gen_dir.glob("trial_*")):
+    otherwise shows them as running forever and ranks their absent scores).
+
+    Scans EVERY generation dir, not just the last: earlier pauses (or resumes
+    that predate this marking) can leave stale states in older generations.
+    ONLY call while no run is live — a live generation's in-flight trials are
+    indistinguishable from stale ones (they would be mislabeled until their
+    own writers overwrite the state).
+    """
+    for tdir in sorted(Path(trials_dir).glob("gen_*/trial_*")):
         path = tdir / "trial_state.json"
         state = read_trial_state(path)
         if not isinstance(state, dict):
@@ -226,7 +230,7 @@ def run_optimization(
         # re-enqueue their params (they run first in the next generation) and
         # close the stale records both in Optuna and on disk.
         recovered = recover_interrupted_trials(study)
-        _mark_interrupted_on_disk(project.trials_dir, gen_offset)
+        _mark_interrupted_on_disk(project.trials_dir)
         if recovered:
             logger.info(
                 f"[resume] Re-enqueued {recovered} interrupted trial(s) — "

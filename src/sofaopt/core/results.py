@@ -23,8 +23,8 @@ from pathlib import Path
 # that recorded neither final_score nor per-test aggregation.
 _LEGACY_AGGREGATION = "mean"
 
-_TERMINAL_STATES = {"done", "failed", "error", "pruned", "skipped", "cancelled"}
-_FAIL_STATES = {"failed", "error", "pruned", "skipped", "cancelled"}
+_TERMINAL_STATES = {"done", "failed", "error", "pruned", "skipped", "cancelled", "interrupted"}
+_FAIL_STATES = {"failed", "error", "pruned", "skipped", "cancelled", "interrupted"}
 
 
 def load_trial_records(trials_dir: Path) -> list[dict]:

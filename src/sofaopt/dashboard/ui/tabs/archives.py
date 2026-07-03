@@ -32,9 +32,10 @@ def build_archives_tab() -> html.Div:
                         style={"maxWidth": "360px"},
                     ),
                     html.Button(
-                        "Archive current run",
+                        "Stop & archive current run",
                         id="archive-now-btn",
                         n_clicks=0,
+                        title="Stops the run first if one is active (clean pause), then moves runtime/ into archives/",
                         className="btn btn-sm btn-primary",
                     ),
                     html.Span(id="archive-action-status", className="ms-3 small"),

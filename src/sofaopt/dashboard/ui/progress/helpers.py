@@ -108,7 +108,7 @@ def _get_trial_actual_state(trial_record: dict) -> str:
     state = str(
         trial_state.get("state") or ("done" if trial_record.get("is_complete") else "running")
     ).lower()
-    terminal = {"done", "failed", "error", "pruned", "skipped", "cancelled"}
+    terminal = {"done", "failed", "error", "pruned", "skipped", "cancelled", "interrupted"}
     if (
         state not in terminal
         and runs
@@ -120,7 +120,7 @@ def _get_trial_actual_state(trial_record: dict) -> str:
 
 def _find_earliest_not_done(records: list[dict]) -> str | None:
     """DOM id of the earliest non-terminal trial card, for auto-scroll."""
-    terminal = {"done", "failed", "error", "pruned", "skipped", "cancelled"}
+    terminal = {"done", "failed", "error", "pruned", "skipped", "cancelled", "interrupted"}
     for record in records:
         if _get_trial_actual_state(record) not in terminal:
             return f"trial-card-{record.get('gen_index', 0):04d}-{record.get('trial_index', 0):04d}"

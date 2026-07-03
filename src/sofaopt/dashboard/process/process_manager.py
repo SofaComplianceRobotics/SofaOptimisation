@@ -91,6 +91,23 @@ def optimize_running() -> bool:
     return _proc_running("optimize")
 
 
+def stop_optimize_and_wait(timeout_s: float = 15.0) -> bool:
+    """Stop the run and WAIT for the process to exit (for stop-&-archive:
+    the runtime dir must not be moved under a live process). True when gone."""
+    proc = _PROCS.get("optimize")
+    if proc is None or proc.poll() is not None:
+        return True
+    try:
+        proc.kill()
+        proc.wait(timeout=timeout_s)
+    except Exception:
+        pass
+    if proc.poll() is not None:
+        _PROCS["optimize"] = None
+        return True
+    return False
+
+
 def launch_scene(scene_file: Path, extra_env: dict | None = None, gui: str = "imgui") -> str:
     """Launch one scene in an interactive ``runSofa`` window for viewing."""
     project = context.project()

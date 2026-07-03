@@ -180,15 +180,22 @@ def register_archives_callbacks(app) -> None:
     def archive_now(n_clicks, name, notes, dirty):
         if not n_clicks:
             raise PreventUpdate
+        stopped = ""
         if _optimize_running():
-            return html.Span(
-                "Stop the running optimization first.", className="text-danger"
-            ), dirty
+            # Stop & archive: pause the run (clean — the study resumes if
+            # restored later), then move its runtime into the archive.
+            from sofaopt.dashboard.process.process_manager import stop_optimize_and_wait
+
+            if not stop_optimize_and_wait():
+                return html.Span(
+                    "Could not stop the running optimization.", className="text-danger"
+                ), dirty
+            stopped = " (run stopped first — restore + Resume to continue it)"
         try:
             dest = archive_run(context.project(), name=name or "", notes=notes or "")
-            return html.Span(f"Archived to {dest.name}", className="text-success"), (
-                dirty or 0
-            ) + 1
+            return html.Span(
+                f"Archived to {dest.name}{stopped}", className="text-success"
+            ), (dirty or 0) + 1
         except FileNotFoundError:
             return html.Span("No run data to archive.", className="text-warning"), dirty
         except Exception as exc:
