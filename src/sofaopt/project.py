@@ -235,6 +235,10 @@ class SofaOptProject:
     ``"cmaes"`` and ``"gp"``. ``"sobol"`` gives a space-filling Sobol' (QMC)
     design that covers parameter interactions evenly before the model-based
     phase begins; ``"random"`` (default) preserves prior behavior."""
+    seed_sampler_seed: int = 1234
+    """Scramble seed for the Sobol' startup design. Change it to get an
+    independent (but equally balanced) exploration — e.g. for a validation
+    run that should not revisit the previous run's startup points."""
     multi_objective: bool = False
     """When True each :class:`TestSpec` becomes a separate Pareto objective and
     NSGA-II is used. Set ``TestSpec.direction`` per test to ``"maximize"`` or

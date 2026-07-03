@@ -30,7 +30,11 @@ def _seed_sampler(project) -> optuna.samplers.BaseSampler:
     if project.seed_sampler == "sobol":
         # Fixed seed → reproducible (scrambled) Sobol' design; a single sampler
         # instance drives all asks, so the parallel-seed caveat does not apply.
-        return optuna.samplers.QMCSampler(qmc_type="sobol", scramble=True, seed=1234)
+        # A different seed gives a different, equally balanced design — use it to
+        # get an INDEPENDENT exploration for a validation run.
+        return optuna.samplers.QMCSampler(
+            qmc_type="sobol", scramble=True, seed=project.seed_sampler_seed
+        )
     return optuna.samplers.RandomSampler()
 
 

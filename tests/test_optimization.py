@@ -23,8 +23,9 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 class _FakeProject:
     """Minimal stand-in exposing only the fields _seed_sampler reads."""
 
-    def __init__(self, seed_sampler="random"):
+    def __init__(self, seed_sampler="random", seed_sampler_seed=1234):
         self.seed_sampler = seed_sampler
+        self.seed_sampler_seed = seed_sampler_seed
 
 
 def test_seed_sampler_selection():
