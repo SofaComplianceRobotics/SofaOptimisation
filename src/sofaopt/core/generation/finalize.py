@@ -258,7 +258,9 @@ class _GenerationFinalizer:
         pct = (100.0 * total_done / total_runs) if total_runs else 100.0
         filled = int(_BAR_WIDTH * total_done / total_runs) if total_runs else _BAR_WIDTH
         bar = "#" * filled + "-" * (_BAR_WIDTH - filled)
-        logger.info(
+        # In-place \r progress bar — must stay a print(): logging has no end=/flush=
+        # and would emit one record per poll tick.
+        print(
             f"\r[progress] Gen {self.gen_index:04d} SOFA [{bar}] "
             f"{total_done}/{total_runs} ({pct:5.1f}%)  "
             f"elapsed {time.time() - start_time:5.1f}s",
