@@ -1,0 +1,6 @@
+# Pin line endings repo-side: commit LF, check out LF — overrides each machine's
+# core.autocrlf, so no conversion round-trip and no "LF will be replaced by CRLF"
+# warnings. Windows-only script types stay CRLF; later rules win over the wildcard.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
