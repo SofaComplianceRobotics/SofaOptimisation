@@ -186,6 +186,8 @@ def run_optimization(
     prune_count = 0  # how many periodic recording prunes have fired
 
     total_gens = gen_offset + project.n_generations
+    stall_best: float | None = None
+    stall_gens = 0
     for gen in range(gen_offset + 1, total_gens + 1):
         write_progress(cfg, gen, 0, history.all_scores, started_at, total_gens=total_gens)
         logger.info(f"\n{'=' * 50}\nGeneration {gen}/{total_gens}\n{'=' * 50}")
@@ -202,6 +204,25 @@ def run_optimization(
 
         _print_best_so_far(study, project)
         prune_count = _maybe_prune_recordings(project, gen, prune_count)
+
+        # Early stop: no best-score improvement for stall_generations in a row.
+        if project.stall_generations > 0 and not project.multi_objective:
+            try:
+                current_best = float(study.best_value)
+            except ValueError:
+                current_best = None
+            if current_best is not None and (
+                stall_best is None or current_best > stall_best + 1e-9
+            ):
+                stall_best, stall_gens = current_best, 0
+            else:
+                stall_gens += 1
+                if stall_gens >= project.stall_generations:
+                    logger.info(
+                        f"[stall] Best score unchanged for {stall_gens} generations "
+                        f"— stopping early at generation {gen}/{total_gens}."
+                    )
+                    break
 
     logger.info("\nOptimization complete.")
     if project.record_frames:

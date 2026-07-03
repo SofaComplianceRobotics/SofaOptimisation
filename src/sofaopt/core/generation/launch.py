@@ -205,6 +205,65 @@ def _record_prepare_failure(
     state.record_score(hard_fail)
 
 
+def completed_score_index(study: optuna.Study, hard_fail_score: float) -> dict:
+    """Frozen param vector -> ``(value, trial_number)`` over completed trials.
+
+    Hard-failed trials (``value <= hard_fail_score``) are excluded: their
+    failures may be transient (env/launch), so a duplicate re-runs them.
+    """
+    index: dict = {}
+    for t in study.get_trials(
+        deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,)
+    ):
+        if t.value is None or t.value <= hard_fail_score:
+            continue
+        key = tuple(sorted(t.params.items()))
+        if key not in index or t.value > index[key][0]:
+            index[key] = (t.value, t.number)
+    return index
+
+
+def _record_cached_trial(
+    cfg: RunConfig,
+    *,
+    study: optuna.Study,
+    trial,
+    trial_state_path: Path,
+    params: dict,
+    gen_index: int,
+    trial_index: int,
+    value: float,
+    source_number: int,
+    result: LaunchResult,
+    state: RunHistory,
+) -> None:
+    """Reuse a completed duplicate's score without launching SOFA (dedup)."""
+    import json
+
+    logger.info(
+        f"[cache] Gen {gen_index:04d} Trial {trial_index:02d}: identical params "
+        f"to trial #{source_number} -> score {value:.2f} reused (sim skipped)"
+    )
+    (trial_state_path.parent / "params.json").write_text(
+        json.dumps(params, indent=2), encoding="utf-8"
+    )
+    for r in range(len(cfg.run_plan)):
+        update_trial_run(
+            trial_state_path,
+            r + 1,
+            {"state": "done", "score": value,
+             "reason": f"cached: duplicate of trial #{source_number}"},
+        )
+    study.tell(trial, value)
+    update_trial_summary(
+        trial_state_path,
+        {"state": "done", "final_score": value,
+         "outcome": f"cached duplicate of trial #{source_number}"},
+    )
+    result.prelaunch_scores.append(value)
+    state.record_score(value)
+
+
 def launch_generation_trials(
     cfg: RunConfig,
     *,
@@ -220,6 +279,12 @@ def launch_generation_trials(
     project = cfg.project
     result = LaunchResult(failed_preview=project.failed_preview_image)
 
+    dedup_index = (
+        completed_score_index(study, project.hard_fail_score)
+        if project.dedup_trials and not project.multi_objective
+        else None
+    )
+
     for i, trial in enumerate(trials):
         trial_index = i + 1
         trial_dir = gen_dir / f"trial_{trial_index:02d}"
@@ -230,6 +295,18 @@ def launch_generation_trials(
             _mark_all_runs(trial_state_path, len(cfg.run_plan), "waiting-slot")
 
         params = params_from_trial(trial, project)
+
+        if dedup_index is not None:
+            hit = dedup_index.get(tuple(sorted(trial.params.items())))
+            if hit is not None:
+                _record_cached_trial(
+                    cfg, study=study, trial=trial,
+                    trial_state_path=trial_state_path, params=params,
+                    gen_index=gen_index, trial_index=trial_index,
+                    value=hit[0], source_number=hit[1],
+                    result=result, state=state,
+                )
+                continue
 
         try:
             _mark_all_runs(trial_state_path, len(cfg.run_plan), "preparing")

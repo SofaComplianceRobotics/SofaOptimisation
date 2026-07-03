@@ -239,6 +239,18 @@ class SofaOptProject:
     """When True each :class:`TestSpec` becomes a separate Pareto objective and
     NSGA-II is used. Set ``TestSpec.direction`` per test to ``"maximize"`` or
     ``"minimize"``. Gating and score weighting are disabled in this mode."""
+    dedup_trials: bool = False
+    """Skip SOFA for a parameter vector that already completed: the recorded
+    score is reused (told to Optuna immediately, trial marked ``cached``).
+    Only safe when the objective is DETERMINISTIC — projects that average
+    noise over run repeats must keep this off. A converged CMA-ES endgame
+    otherwise re-simulates one lattice point for whole generations.
+    Ignored for multi-objective studies."""
+    stall_generations: int = 0
+    """Stop the run early after this many consecutive generations without any
+    improvement of the best score (0 = run all ``n_generations``). Post-run
+    steps (summary video, report) still execute. Ignored for multi-objective
+    studies."""
     hard_fail_score: float = -3.0
     max_active_sofa_procs: int = 12
     max_run_relaunches: int = 0
