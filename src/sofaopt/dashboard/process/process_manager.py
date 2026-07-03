@@ -72,12 +72,23 @@ def _read_proc_log(name: str, tail: int = 150) -> str:
 
 
 def start_optimize(env: dict | None = None) -> str:
-    """Launch the project's headless optimization run."""
+    """Launch the project's headless optimization run (auto-resumes a study)."""
     return _start_proc("optimize", context.project().run_script, env)
 
 
 def stop_optimize() -> str:
-    return _stop_proc("optimize")
+    """Stop the run — this is a PAUSE: the study resumes from the last
+    completed generation, and interrupted trials are re-enqueued."""
+    msg = _stop_proc("optimize")
+    if msg == "Stopped.":
+        return ("Paused — Resume continues from the last completed generation "
+                "(interrupted trials are re-enqueued).")
+    return msg
+
+
+def optimize_running() -> bool:
+    """True while the dashboard-launched optimization process is alive."""
+    return _proc_running("optimize")
 
 
 def launch_scene(scene_file: Path, extra_env: dict | None = None, gui: str = "imgui") -> str:

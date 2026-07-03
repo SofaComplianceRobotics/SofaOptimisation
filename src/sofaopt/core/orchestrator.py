@@ -8,8 +8,10 @@ import os
 import sys
 import time
 
+from pathlib import Path
+
 from sofaopt.core import envkeys
-from sofaopt.core.algorithm import build_study
+from sofaopt.core.algorithm import build_study, recover_interrupted_trials
 from sofaopt.core.generation.runner import run_generation
 from sofaopt.core.generation.types import RunHistory
 from sofaopt.core.runconfig import RunConfig
@@ -19,9 +21,48 @@ from sofaopt.core.runtime_dirs import (
     reset_trials_dir,
 )
 from sofaopt.core.scoring import write_progress
+from sofaopt.core.trial_state import (
+    read_trial_state,
+    update_trial_run,
+    update_trial_summary,
+)
 from sofaopt.project import SofaOptProject
 
 logger = logging.getLogger(__name__)
+
+_TERMINAL_STATES = ("done", "failed", "pruned", "interrupted", "cached")
+
+
+def _mark_interrupted_on_disk(trials_dir: Path, gen_index: int) -> None:
+    """Close out trial states a killed run left non-terminal (the dashboard
+    otherwise shows them as running forever)."""
+    gen_dir = trials_dir / f"gen_{gen_index:04d}"
+    if gen_index <= 0 or not gen_dir.is_dir():
+        return
+    for tdir in sorted(gen_dir.glob("trial_*")):
+        path = tdir / "trial_state.json"
+        state = read_trial_state(path)
+        if not isinstance(state, dict):
+            continue
+        runs = state.get("runs") or []
+        open_slots = [
+            i + 1
+            for i, r in enumerate(runs)
+            if isinstance(r, dict) and str(r.get("state", "")) not in _TERMINAL_STATES
+        ]
+        if str(state.get("state", "")) in _TERMINAL_STATES and not open_slots:
+            continue
+        for slot in open_slots:
+            update_trial_run(
+                path, slot,
+                {"state": "interrupted", "reason": "interrupted (run paused/killed)"},
+            )
+        if str(state.get("state", "")) not in _TERMINAL_STATES:
+            update_trial_summary(
+                path,
+                {"state": "interrupted", "final_score": None,
+                 "outcome": "interrupted — params re-enqueued on resume"},
+            )
 
 
 def _apply_env_overrides(project: SofaOptProject) -> SofaOptProject:
@@ -179,6 +220,18 @@ def run_optimization(
     # When resuming, continue generation numbering from the dirs actually on
     # disk (see runtime_dirs.last_gen_index for why not the Optuna trial count).
     gen_offset = last_gen_index(project.trials_dir) if resuming else 0
+
+    if resuming:
+        # A pause/kill mid-generation leaves asked-but-unscored trials behind:
+        # re-enqueue their params (they run first in the next generation) and
+        # close the stale records both in Optuna and on disk.
+        recovered = recover_interrupted_trials(study)
+        _mark_interrupted_on_disk(project.trials_dir, gen_offset)
+        if recovered:
+            logger.info(
+                f"[resume] Re-enqueued {recovered} interrupted trial(s) — "
+                f"they run first in generation {gen_offset + 1}."
+            )
 
     env = cfg.base_scene_env()
     history = RunHistory()

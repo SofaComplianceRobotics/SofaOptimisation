@@ -8,8 +8,10 @@ import os
 from dash import ALL, Input, Output, State, ctx
 
 from sofaopt.core import envkeys
+from sofaopt.dashboard import context
 from sofaopt.dashboard.process.process_manager import (
     _read_proc_log,
+    optimize_running,
     start_optimize,
     stop_optimize,
 )
@@ -235,3 +237,20 @@ def register_optimise_callbacks(app) -> None:
     )
     def update_opt_log(_):
         return _read_proc_log("optimize")
+
+    @app.callback(
+        Output("opt-start-btn", "children"),
+        Output("opt-stop-btn", "children"),
+        Output("opt-stop-btn", "disabled"),
+        Input("opt-interval", "n_intervals"),
+    )
+    def refresh_run_buttons(_):
+        """Start/Stop are really Start/Resume + Pause: reflect that live."""
+        running = optimize_running()
+        try:
+            has_study = context.project().db_path.exists()
+        except Exception:
+            has_study = False
+        start_label = ("Resume Optimisation" if has_study and not running
+                       else "Start Optimisation")
+        return start_label, "Pause", not running

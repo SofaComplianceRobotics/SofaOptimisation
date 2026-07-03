@@ -204,7 +204,7 @@ def build_optimise_tab(catalog: dict) -> html.Div:
             html.Div(
                 [
                     html.Button("Start Optimisation", id="opt-start-btn", n_clicks=0, className="btn btn-success me-2"),
-                    html.Button("Stop", id="opt-stop-btn", n_clicks=0, className="btn btn-danger"),
+                    html.Button("Pause", id="opt-stop-btn", n_clicks=0, disabled=True, className="btn btn-danger"),
                 ],
                 className="mb-3",
             ),

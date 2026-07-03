@@ -114,6 +114,29 @@ def build_study(db_path: Path, cfg: RunConfig, resume: bool = False) -> optuna.S
     )
 
 
+def recover_interrupted_trials(study: optuna.Study) -> int:
+    """Re-enqueue interrupted (RUNNING) trials so a resumed run re-evaluates them.
+
+    A paused/killed run leaves asked-but-never-told trials behind. Their param
+    vectors are enqueued (``study.enqueue_trial``) so the next generation's asks
+    return them first, and the stale RUNNING records are closed as FAILED so
+    they don't linger in the study. Returns how many were re-enqueued.
+    """
+    running = study.get_trials(
+        deepcopy=False, states=(optuna.trial.TrialState.RUNNING,)
+    )
+    count = 0
+    for t in running:
+        if t.params:
+            study.enqueue_trial(t.params)
+            count += 1
+        try:
+            study.tell(t.number, state=optuna.trial.TrialState.FAIL)
+        except Exception:
+            pass
+    return count
+
+
 def _is_pruned(trial_state: dict) -> bool:
     return str(trial_state.get("state", "")).lower() == "pruned" or any(
         isinstance(run, dict) and str(run.get("state", "")).lower() == "pruned"
