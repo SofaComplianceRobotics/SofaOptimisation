@@ -13,6 +13,7 @@ from sofaopt.core.generation.types import LaunchedTrial, LaunchResult, RunHistor
 from sofaopt.core.runconfig import RunConfig
 from sofaopt.core.sofa_runner import (
     active_sofa_process_count,
+    kill_process_tree,
     launch_sofa,
     wait_for_slot,
 )
@@ -336,10 +337,7 @@ def launch_generation_trials(
                 # runs that did start, so nothing keeps running unsupervised.
                 result.trials.remove(entry)
                 for proc, _, _ in entry.runs:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+                    kill_process_tree(proc)
                 raise
 
         except Exception as e:

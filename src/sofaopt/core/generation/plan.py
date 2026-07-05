@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from sofaopt.core.runconfig import RunConfig
+from sofaopt.core.sofa_runner import kill_process_tree
 from sofaopt.core.trial_state import (
 
     read_trial_state,
@@ -45,10 +46,7 @@ def prune_trial(
     """Kill a trial's active SOFA runs and mark every slot + the trial pruned."""
     for proc, _path, _run_slot in runs:
         if proc.poll() is None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            kill_process_tree(proc)
 
     for run_slot in range(1, cfg.n_repeats + 1):
         update_trial_run(

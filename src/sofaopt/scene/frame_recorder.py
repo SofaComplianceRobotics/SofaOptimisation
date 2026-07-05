@@ -320,7 +320,11 @@ class FrameRecorder:
                 self._ffmpeg.stdin.write(raw)
                 self._ffmpeg.stdin.flush()
             except (BrokenPipeError, OSError):
-                self._ffmpeg = None  # ffmpeg died; stop trying
+                try:  # ffmpeg died; reap it before dropping the reference
+                    self._ffmpeg.wait(timeout=1)
+                except Exception:
+                    pass
+                self._ffmpeg = None
 
         if self._pygame:
             try:
@@ -339,7 +343,11 @@ class FrameRecorder:
             try:
                 self._ffmpeg.wait(timeout=30)
             except Exception:
-                pass
+                try:  # flush hung — don't leave an ffmpeg holding the .mp4 open
+                    self._ffmpeg.kill()
+                    self._ffmpeg.wait(timeout=5)
+                except Exception:
+                    pass
             self._ffmpeg = None
         if self._pygame:
             try:

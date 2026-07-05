@@ -48,24 +48,14 @@ def _start_proc(name: str, script: Path, env: dict | None = None) -> str:
         return f"Error starting process: {exc}"
 
 
-def _kill_tree(proc: subprocess.Popen) -> None:
-    """Kill the process AND its children. ``proc.kill()`` alone orphans the
-    SOFA workers / ffmpeg encoders the run spawned — they linger in the task
-    manager until each finishes on its own."""
-    if sys.platform == "win32":
-        subprocess.run(
-            ["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True
-        )
-    else:
-        proc.kill()
-
-
 def _stop_proc(name: str) -> str:
+    from sofaopt.core.sofa_runner import kill_process_tree
+
     proc = _PROCS.get(name)
     if proc is None or proc.poll() is not None:
         return "Not running."
     try:
-        _kill_tree(proc)
+        kill_process_tree(proc)
         proc.wait(timeout=10)
         _PROCS[name] = None
         return "Stopped."
@@ -118,11 +108,13 @@ def optimize_running() -> bool:
 def stop_optimize_and_wait(timeout_s: float = 15.0) -> bool:
     """Stop the run and WAIT for the process to exit (for stop-&-archive:
     the runtime dir must not be moved under a live process). True when gone."""
+    from sofaopt.core.sofa_runner import kill_process_tree
+
     proc = _PROCS.get("optimize")
     if proc is None or proc.poll() is not None:
         return True
     try:
-        _kill_tree(proc)
+        kill_process_tree(proc)
         proc.wait(timeout=timeout_s)
     except Exception:
         pass

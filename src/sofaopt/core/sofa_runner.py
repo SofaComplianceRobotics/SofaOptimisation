@@ -202,21 +202,50 @@ def launch_sofa(
     return proc
 
 
-def wait_or_kill(proc: subprocess.Popen, timeout_s: float) -> bool:
-    """Wait for one SOFA process to exit; kill it past ``timeout_s``.
+def kill_process_tree(proc: subprocess.Popen) -> None:
+    """Kill a SOFA child AND everything it spawned (ffmpeg encoder, workers).
+
+    A bare ``proc.kill()`` reaps only the direct child; its descendants stay
+    alive inside the Job Object, which releases them only when the OPTIMIZER
+    exits — mid-campaign that leaks them for hours. Single source of truth for
+    every kill in core and dashboard.
+    """
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True, timeout=15,
+            )
+        except Exception:
+            pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
+
+def wait_or_kill(proc: subprocess.Popen, timeout_s: float, kill_grace_s: float = 5.0) -> bool:
+    """Wait for one SOFA process to exit; tree-kill it past ``timeout_s``.
 
     The single-run form of the ``sofa_realtime_timeout`` backstop (the
     generation finalizer applies the same timeout across its parallel scan).
-    The Job Object reaps any children of the killed process. Returns True
-    when the process exited on its own, False when it was killed.
+    Returns True when the process exited on its own, False when it was killed.
+    A kill is verified by polling; a child that survives it is kernel-wedged
+    (the known Windows SOFA failure mode) and is logged — it clears only on
+    reboot, so don't count on its slot.
     """
     deadline = time.time() + timeout_s
     while proc.poll() is None:
         if time.time() > deadline:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            kill_process_tree(proc)
+            grace_end = time.time() + kill_grace_s
+            while proc.poll() is None and time.time() < grace_end:
+                time.sleep(0.2)
+            if proc.poll() is None:
+                logger.warning(
+                    "SOFA child %s survived the kill (wedged in native code); "
+                    "it will linger until reboot", proc.pid,
+                )
             return False
         time.sleep(0.2)
     return True
