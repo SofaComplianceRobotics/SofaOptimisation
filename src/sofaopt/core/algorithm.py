@@ -137,6 +137,17 @@ def recover_interrupted_trials(study: optuna.Study) -> int:
     return count
 
 
+def tell_safely(study: optuna.Study, trial, *args, **kwargs) -> None:
+    """``study.tell`` that survives a trial someone else already closed
+    ("Cannot tell a FAIL trial"): the score is on disk either way, and one
+    unrecordable trial must not kill the whole run."""
+    try:
+        study.tell(trial, *args, **kwargs)
+    except Exception as exc:
+        num = getattr(trial, "number", trial)
+        logger.error(f"[optuna] Could not record trial {num}: {exc}")
+
+
 def _is_pruned(trial_state: dict) -> bool:
     return str(trial_state.get("state", "")).lower() == "pruned" or any(
         isinstance(run, dict) and str(run.get("state", "")).lower() == "pruned"
@@ -145,7 +156,7 @@ def _is_pruned(trial_state: dict) -> bool:
 
 
 def _tell_pruned(study, trial, trial_state, trial_state_path, trial_index) -> float:
-    study.tell(trial, state=optuna.trial.TrialState.PRUNED)
+    tell_safely(study, trial, state=optuna.trial.TrialState.PRUNED)
     update_trial_summary(
         trial_state_path,
         {
@@ -162,9 +173,9 @@ def _fail_trial(cfg, study, trial, trial_state_path, outcome: str) -> float:
     """Report a hard-failed trial to Optuna and the trial summary."""
     hard_fail = cfg.project.hard_fail_score
     if cfg.project.multi_objective:
-        study.tell(trial, [hard_fail] * len(cfg.selected_tests))
+        tell_safely(study, trial, [hard_fail] * len(cfg.selected_tests))
     else:
-        study.tell(trial, hard_fail)
+        tell_safely(study, trial, hard_fail)
     update_trial_summary(
         trial_state_path,
         {"state": "failed", "final_score": hard_fail, "outcome": outcome},
@@ -236,7 +247,7 @@ def _tell_multi_objective(
         else hard_fail
         for t in cfg.selected_tests
     ]
-    study.tell(trial, objective_values)
+    tell_safely(study, trial, objective_values)
     update_trial_summary(
         trial_state_path,
         {
@@ -339,7 +350,7 @@ def _finalize_trial_score(
     )
     aggregate_score = final_score
     median_score = statistics.median(counted_scores) if counted_scores else 0.0
-    study.tell(trial, final_score)
+    tell_safely(study, trial, final_score)
 
     update_trial_summary(
         trial_state_path,

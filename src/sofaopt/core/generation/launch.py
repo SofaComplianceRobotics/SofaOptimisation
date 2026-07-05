@@ -8,6 +8,7 @@ from pathlib import Path
 
 import optuna
 
+from sofaopt.core.algorithm import tell_safely
 from sofaopt.core.generation.types import LaunchedTrial, LaunchResult, RunHistory
 from sofaopt.core.runconfig import RunConfig
 from sofaopt.core.sofa_runner import (
@@ -190,9 +191,9 @@ def _record_prepare_failure(
             {"state": "failed", "score": None, "reason": str(error)},
         )
     if project.multi_objective:
-        study.tell(trial, [hard_fail] * len(cfg.selected_tests))
+        tell_safely(study, trial, [hard_fail] * len(cfg.selected_tests))
     else:
-        study.tell(trial, hard_fail)
+        tell_safely(study, trial, hard_fail)
     update_trial_summary(
         trial_state_path,
         {
@@ -254,7 +255,7 @@ def _record_cached_trial(
             {"state": "done", "score": value,
              "reason": f"cached: duplicate of trial #{source_number}"},
         )
-    study.tell(trial, value)
+    tell_safely(study, trial, value)
     update_trial_summary(
         trial_state_path,
         {"state": "done", "final_score": value,

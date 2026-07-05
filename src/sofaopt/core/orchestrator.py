@@ -12,6 +12,7 @@ from pathlib import Path
 
 from sofaopt.core import envkeys
 from sofaopt.core.algorithm import build_study, recover_interrupted_trials
+from sofaopt.core.runlock import acquire_run_lock, release_run_lock
 from sofaopt.core.generation.runner import run_generation
 from sofaopt.core.generation.types import RunHistory
 from sofaopt.core.runconfig import RunConfig
@@ -196,6 +197,18 @@ def run_optimization(
         project = _apply_env_overrides(project)
         cfg = RunConfig.from_env(project)
 
+    # At most one optimizer per study: a second process resuming the same
+    # study.db fails the first one's in-flight trials (see core/runlock.py).
+    lock = acquire_run_lock(project.runtime_dir)
+    if lock is None:
+        return
+    try:
+        _run(project, cfg)
+    finally:
+        release_run_lock(lock)
+
+
+def _run(project: SofaOptProject, cfg: RunConfig) -> None:
     # Windows consoles default to cp1252; make sure framework logging (and any
     # non-ASCII in scene output) never crashes the run on an encode error.
     for _stream in (sys.stdout, sys.stderr):

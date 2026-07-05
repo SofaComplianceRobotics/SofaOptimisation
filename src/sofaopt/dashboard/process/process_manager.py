@@ -48,12 +48,25 @@ def _start_proc(name: str, script: Path, env: dict | None = None) -> str:
         return f"Error starting process: {exc}"
 
 
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill the process AND its children. ``proc.kill()`` alone orphans the
+    SOFA workers / ffmpeg encoders the run spawned — they linger in the task
+    manager until each finishes on its own."""
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True
+        )
+    else:
+        proc.kill()
+
+
 def _stop_proc(name: str) -> str:
     proc = _PROCS.get(name)
     if proc is None or proc.poll() is not None:
         return "Not running."
     try:
-        proc.kill()
+        _kill_tree(proc)
+        proc.wait(timeout=10)
         _PROCS[name] = None
         return "Stopped."
     except Exception as exc:
@@ -73,6 +86,17 @@ def _read_proc_log(name: str, tail: int = 150) -> str:
 
 def start_optimize(env: dict | None = None) -> str:
     """Launch the project's headless optimization run (auto-resumes a study)."""
+    if not _proc_running("optimize"):
+        # A run started OUTSIDE the dashboard (CLI/script) holds the run lock;
+        # launching a second orchestrator on the same study corrupts both.
+        from sofaopt.core.runlock import lock_holder
+
+        pid = lock_holder(context.project().runtime_dir)
+        if pid:
+            return (
+                f"An optimization for this study is already running outside the "
+                f"dashboard (PID {pid}) — stop it first."
+            )
     return _start_proc("optimize", context.project().run_script, env)
 
 
@@ -98,7 +122,7 @@ def stop_optimize_and_wait(timeout_s: float = 15.0) -> bool:
     if proc is None or proc.poll() is not None:
         return True
     try:
-        proc.kill()
+        _kill_tree(proc)
         proc.wait(timeout=timeout_s)
     except Exception:
         pass
