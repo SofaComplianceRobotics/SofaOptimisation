@@ -88,6 +88,11 @@ class Trial:
         """Mark this run pruned (not scored) and stop the simulation."""
         self._ensure_writer().write_pruned_and_stop(reason)
 
+    @property
+    def finished(self) -> bool:
+        """True once a final score or prune has been written for this run."""
+        return self._writer is not None and self._writer.finished
+
     # --- relaunchable probes (carry state across runSofa relaunches) ---------
     @property
     def trial_dir(self) -> Path | None:

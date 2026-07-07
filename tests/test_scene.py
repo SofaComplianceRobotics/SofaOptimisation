@@ -76,6 +76,27 @@ class TestUnderOptimizer:
         assert read_trial_run(state_path, 2)["current_frame"] == 10
         assert read_trial_run(state_path, 1)["current_frame"] == 0
 
+    def test_finished_flips_after_status_free_score_write(self, tmp_path, monkeypatch):
+        clear_env(monkeypatch)
+        state_path = tmp_path / "trial_state.json"
+        init_trial_state(state_path, gen_index=1, trial_index=1, run_plan=[("grasp", 1, 1)])
+        monkeypatch.setenv(envkeys.TRIAL_STATE_PATH, str(state_path))
+        monkeypatch.setenv(envkeys.RUN_SLOT, "1")
+
+        trial = open_trial()
+        assert not trial.finished
+        # write_status alone must not mark the run finished
+        trial.write_status({"state": "running"})
+        assert not trial.finished
+
+    def test_interactive_score_write_marks_finished_without_exiting(self, monkeypatch):
+        # No trial_state_path: scoring stops the sim but must not kill the
+        # process (hand-launched scenes), and finished flips to True.
+        clear_env(monkeypatch)
+        trial = open_trial()
+        trial.write_score(1.0, reason="done")
+        assert trial.finished
+
     def test_carry_round_trip(self, tmp_path, monkeypatch):
         clear_env(monkeypatch)
         state_path = tmp_path / "trial_state.json"
