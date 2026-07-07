@@ -52,6 +52,7 @@ __all__ = [
     "param_specs_from_dataclass",
     "run_optimization",
     "launch_dashboard",
+    "DashboardTab",
 ]
 
 __version__ = "0.1.0"
@@ -67,4 +68,8 @@ def __getattr__(name: str):
         from .dashboard.app import launch_dashboard
 
         return launch_dashboard
+    if name == "DashboardTab":
+        from .dashboard.app import DashboardTab
+
+        return DashboardTab
     raise AttributeError(f"module 'sofaopt' has no attribute {name!r}")

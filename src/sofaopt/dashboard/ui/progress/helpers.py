@@ -3,21 +3,33 @@
 from sofaopt.dashboard import context
 from sofaopt.dashboard.data.cache import _load_trial_state
 
-_MAX_SCORE_CACHE: dict[str, float] = {}
+_RUN_MAX_SCORE_CACHE: dict[str, float] = {}
 
 
-def _get_test_max_score(test_name: str) -> float:
-    """Configured max score for a test (defaults to 1.0)."""
+def _get_run_max_score(test_name: str) -> float:
+    """Maximum score a single run of a test can reach (defaults to 1.0).
+
+    The catalog's ``max_score`` is the test-total ceiling. For ``sum``
+    aggregated tests that total spans every run, so a single run's bar must
+    be scaled by the per-run ceiling ``max_score / run_count`` instead. Other
+    aggregations score each run against the full ceiling, so the total is
+    used as-is.
+    """
     if not test_name:
         return 1.0
-    if test_name in _MAX_SCORE_CACHE:
-        return _MAX_SCORE_CACHE[test_name]
+    if test_name in _RUN_MAX_SCORE_CACHE:
+        return _RUN_MAX_SCORE_CACHE[test_name]
     try:
         spec = context.catalog().get(test_name)
-        result = spec.max_score if spec else 1.0
+        if spec is None:
+            result = 1.0
+        elif spec.score_aggregation == "sum" and spec.run_count > 1:
+            result = spec.max_score / spec.run_count
+        else:
+            result = spec.max_score
     except Exception:
         result = 1.0
-    _MAX_SCORE_CACHE[test_name] = result
+    _RUN_MAX_SCORE_CACHE[test_name] = result
     return result
 
 

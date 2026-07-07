@@ -22,7 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # The live web dashboard (optional — the optimizer runs headless without it).
-dashboard = ["dash>=2.0", "plotly>=5.0"]
+dashboard = ["dash>=2.0", "plotly>=5.0", "cmaes>=0.10"]
 # STL preview rendering for shape-optimization projects (optional).
 preview = ["pyvista>=0.40"]
 dev = ["pytest>=7.0"]
