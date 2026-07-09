@@ -53,6 +53,12 @@ def _get_report():
         report = analysis.analyze(db)
         _CACHE.update(key=key, report=report, ts=now, error=None)
         return report, None
+    except ImportError as exc:
+        # The [analysis] extra (scikit-learn) is not installed — an install
+        # gap, not a data gap. Surface analysis.py's own install prompt verbatim
+        # instead of framing it as "not enough data yet".
+        _CACHE.update(ts=now, error=str(exc))
+        return _CACHE["report"], (None if _CACHE["report"] is not None else str(exc))
     except Exception as exc:
         _CACHE.update(ts=now, error=str(exc))
         return _CACHE["report"], (None if _CACHE["report"] is not None else f"Not enough data yet: {exc}")
