@@ -4,6 +4,8 @@ Usage::
 
     python dashboard.py                          # default project
     python dashboard.py --variant tpe            # TPE sampler run
+    python dashboard.py --variant gp             # GP Bayesian optimization run
+    python dashboard.py --variant sobol          # Sobol' space-filling startup run
     python dashboard.py --variant python         # Python runner run
     python dashboard.py --variant pareto         # Multi-objective run (shows Pareto tab)
     python dashboard.py --variant pareto-python  # Multi-objective + Python runner
@@ -17,9 +19,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from project import (  # noqa: E402
     PROJECT,
+    PROJECT_GP,
     PROJECT_MULTI_OBJ,
     PROJECT_MULTI_OBJ_PYTHON,
     PROJECT_PYTHON_RUNNER,
+    PROJECT_SOBOL,
     PROJECT_TPE,
 )
 
@@ -28,6 +32,8 @@ from sofaopt import launch_dashboard  # noqa: E402
 _VARIANTS = {
     "default":       PROJECT,
     "tpe":           PROJECT_TPE,
+    "gp":            PROJECT_GP,
+    "sobol":         PROJECT_SOBOL,
     "python":        PROJECT_PYTHON_RUNNER,
     "pareto":        PROJECT_MULTI_OBJ,
     "pareto-python": PROJECT_MULTI_OBJ_PYTHON,

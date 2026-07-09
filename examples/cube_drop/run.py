@@ -4,7 +4,9 @@ Usage::
 
     python run.py                          # default (CMA-ES, runSofa)
     python run.py --variant tpe            # TPE Bayesian sampler
-    python run.py --variant python         # Python in-process runner
+    python run.py --variant gp             # GP Bayesian optimization sampler
+    python run.py --variant sobol          # CMA-ES with a Sobol' space-filling startup
+    python run.py --variant python         # Python in-process runner (+ trial recording)
     python run.py --variant pareto         # Multi-objective NSGA-II (Pareto front, runSofa)
     python run.py --variant pareto-python  # Multi-objective + Python in-process runner
 """
@@ -17,9 +19,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from project import (  # noqa: E402
     PROJECT,
+    PROJECT_GP,
     PROJECT_MULTI_OBJ,
     PROJECT_MULTI_OBJ_PYTHON,
     PROJECT_PYTHON_RUNNER,
+    PROJECT_SOBOL,
     PROJECT_TPE,
 )
 
@@ -28,6 +32,8 @@ from sofaopt import run_optimization  # noqa: E402
 _VARIANTS = {
     "default":       PROJECT,
     "tpe":           PROJECT_TPE,
+    "gp":            PROJECT_GP,
+    "sobol":         PROJECT_SOBOL,
     "python":        PROJECT_PYTHON_RUNNER,
     "pareto":        PROJECT_MULTI_OBJ,
     "pareto-python": PROJECT_MULTI_OBJ_PYTHON,

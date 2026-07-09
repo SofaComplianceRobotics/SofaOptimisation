@@ -35,20 +35,30 @@ python dashboard.py  # or the web UI at http://localhost:8050
 
 ### Variants
 
-```powershell
-python run.py --variant default    # CMA-ES / runSofa (this README's default)
-python run.py --variant tpe        # TPE Bayesian sampler
-python run.py --variant python     # in-process Python runner + trial recording
-python run.py --variant pareto     # multi-objective NSGA-II (fall_fast vs compact)
-python run.py --variant pareto-python  # multi-objective + Python runner
-python sensitivity_test.py         # OAT sensitivity analysis
-```
+Each variant is a one-line `dataclasses.replace` of the same project
+(`project.py`) — exactly how you'd flip these switches in your own project.
+[docs/optimization-guide.md](../../docs/optimization-guide.md) explains when
+each choice wins.
 
-Extras per variant: `default`/`tpe`/`pareto` need only the base install
-(`[dashboard]` for the web UI); `python` records videos and therefore needs
-`pip install -e .[video]` **and** `ffmpeg` on PATH; `sensitivity_test.py`
+| Variant | Command | When you'd pick it |
+|---|---|---|
+| `default` | `python run.py` | CMA-ES via `runSofa` — the standard setup for continuous parameters. |
+| **`python`** | `python run.py --variant python` | **SofaPython3 in-process runner** — the scene imports `Sofa` directly (access to `Sofa.Core`/`Sofa.Simulation` between steps) and it's the only runner that supports **per-trial video recording** (`record_frames=True`; each trial writes a `trial.mp4`). |
+| `tpe` | `python run.py --variant tpe` | TPE Bayesian sampler — often faster than CMA-ES with ≤ 5 params. |
+| `gp` | `python run.py --variant gp` | GP Bayesian optimization — sample-efficient when each simulation is expensive. |
+| `sobol` | `python run.py --variant sobol` | CMA-ES with a Sobol' space-filling startup design — even coverage of the exploration phase. |
+| `pareto` | `python run.py --variant pareto` | Multi-objective NSGA-II (fall-fast *vs* compact) — see the dashboard's Pareto tab. |
+| `pareto-python` | `python run.py --variant pareto-python` | Multi-objective + the Python runner combined. |
+| — | `python sensitivity_test.py` | OAT sensitivity sweep — check the score responds to the params before a big run. |
+
+Extras per variant: `default`/`tpe`/`gp`/`sobol`/`pareto` need only the base
+install (`[dashboard]` for the web UI); `python` records videos and therefore
+needs `pip install -e .[video]` **and** `ffmpeg` on PATH; `sensitivity_test.py`
 needs the base install only, while the dashboard's Importance/Interactions
 tab needs `pip install -e .[analysis]`.
+
+Every variant also works with the dashboard:
+`python dashboard.py --variant <name>`.
 
 **Git Bash / Linux / macOS:**
 
@@ -69,9 +79,11 @@ generations.
 
 | File | Role |
 |------|------|
-| `project.py` | The `SofaOptProject` + the prepare hook that writes `cube.obj`. |
+| `project.py` | The `SofaOptProject`, all variants, + the prepare hook that writes `cube.obj`. |
 | `scene.py` | Rigid cube + gravity + buoyancy; scores on contact. |
-| `run.py` / `dashboard.py` | Headless / web entry points. |
+| `scene_compact.py` | Second objective for the Pareto variants (prefers a small cube). |
+| `run.py` / `dashboard.py` | Headless / web entry points (`--variant <name>`). |
+| `sensitivity_test.py` | One-at-a-time (OAT) sensitivity sweep of the two params. |
 
 > Plugin names target SOFA v23.06+. If a `RequiredPlugin` errors, adjust the
 > list at the top of `scene.py` for your version.

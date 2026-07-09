@@ -110,6 +110,19 @@ PROJECT = SofaOptProject(
 # TPE (Bayesian) sampler — often converges faster than CMA-ES with ≤ 5 parameters.
 PROJECT_TPE = dataclasses.replace(PROJECT, name="cube_drop_tpe", sampler="tpe")
 
+# GP Bayesian optimization — the sample-efficient choice when each simulation
+# is expensive and the searched dimensionality is small (< ~20).  Overkill for
+# this toy, but demonstrates the wiring (see docs/optimization-guide.md §2).
+PROJECT_GP = dataclasses.replace(PROJECT, name="cube_drop_gp", sampler="gp")
+
+# Sobol' space-filling startup — the first `cmaes_startup_trials` candidates
+# come from a scrambled Sobol' (QMC) design instead of uniform random, so the
+# exploration phase covers the space (and parameter interactions) evenly.
+# Change seed_sampler_seed for an independent but equally balanced design.
+PROJECT_SOBOL = dataclasses.replace(
+    PROJECT, name="cube_drop_sobol", seed_sampler="sobol"
+)
+
 # Python in-process runner — scene imports Sofa directly instead of runSofa.
 # Gives scene code access to Sofa.Core / Sofa.Simulation while keeping
 # subprocess isolation.  Useful when the scene needs to call Sofa.Simulation.reset()
