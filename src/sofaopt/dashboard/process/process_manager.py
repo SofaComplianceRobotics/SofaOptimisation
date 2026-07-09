@@ -35,8 +35,11 @@ def _start_proc(name: str, script: Path, env: dict | None = None) -> str:
         log_file = open(log_path, "w", encoding="utf-8")
         run_env = env if env is not None else os.environ.copy()
         run_env["PYTHONIOENCODING"] = "utf-8"
+        python_exe = context.project().run_python_exe
+        if python_exe is None or not os.path.isfile(str(python_exe)):
+            python_exe = sys.executable
         proc = subprocess.Popen(
-            [sys.executable, str(script)],
+            [str(python_exe), str(script)],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             cwd=str(Path(script).parent),

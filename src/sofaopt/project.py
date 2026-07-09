@@ -272,6 +272,11 @@ class SofaOptProject:
     """Script the dashboard's Run button executes to start a headless
     optimization (typically a one-liner calling ``run_optimization(PROJECT)``).
     If None, the dashboard runs read-only (no Run/Stop)."""
+    run_python_exe: Path | None = None
+    """Interpreter the dashboard uses to run ``run_script``. Defaults to the
+    interpreter serving the dashboard (``sys.executable``) — set it when the
+    dashboard may run under a foreign Python whose packages differ from the
+    ones the optimization needs (e.g. a SOFA build's bundled Python)."""
     config_file: Path | None = None
     """Optional text/JSON config file to expose in the dashboard's Config tab.
     If None, the Config tab is hidden."""

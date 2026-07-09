@@ -7,7 +7,7 @@ from sofaopt.dashboard.plotting.colors import C_BANNER  # noqa: F401
 
 from .helpers import (
     _get_live_score,
-    _get_test_max_score,
+    _get_run_max_score,
     _get_trial_actual_state,
     _run_state_label,
     _state_color,
@@ -70,7 +70,7 @@ def _build_progress_card(trial_record: dict) -> html.Div:
         bar_color = _state_color(run_state)
 
         test_name = run.get("test_name") or run.get("run_label") or "run"
-        max_score = _get_test_max_score(test_name)
+        max_score = _get_run_max_score(test_name)
         segments = run.get("weight_segments")
         weight_points = run.get("weight_points")
         selected_weight = run.get("weight_selected_value")

@@ -61,6 +61,7 @@ __all__ = [
     "generate_selected_videos",
     "generate_summary_video",
     "cleanup_trial_recordings",
+    "DashboardTab",
 ]
 
 __version__ = "0.1.0"
@@ -100,4 +101,8 @@ def __getattr__(name: str):
         from .video import cleanup_trial_recordings
 
         return cleanup_trial_recordings
+    if name == "DashboardTab":
+        from .dashboard.app import DashboardTab
+
+        return DashboardTab
     raise AttributeError(f"module 'sofaopt' has no attribute {name!r}")

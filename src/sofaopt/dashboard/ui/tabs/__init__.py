@@ -7,6 +7,7 @@ from .interactions import build_interactions_tab
 from .optimize import PIE_PALETTE, _equal_split, build_optimise_tab
 from .pareto import build_pareto_tab
 from .performance import build_performance_tab
+from .playground import build_playground_tab
 from .progress import build_progress_tab
 from .scenes import build_scenes_tab
 from .styles import LOG_STYLE
@@ -17,6 +18,7 @@ __all__ = [
     "build_scenes_tab",
     "build_optimise_tab",
     "build_performance_tab",
+    "build_playground_tab",
     "build_param_bounds_tab",
     "build_progress_tab",
     "build_pareto_tab",

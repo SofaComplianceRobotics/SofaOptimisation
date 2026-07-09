@@ -97,6 +97,10 @@ def test_aggregate_exponential_coverage_rewards_multiple_positives():
     # no positive runs -> 0.0 multiplier
     assert aggregate_repeats([-1.0, 0.0], "exponential_coverage") == 0.0
 
+def test_aggregate_exponential_coverage_ignores_zero_scores_in_count():
+    # One positive run: multiplier stays 1.0 even with zero-score runs present.
+    assert aggregate_repeats([3.0, 0.0], "exponential_coverage") == pytest.approx(3.0)
+
 
 def test_combine_weighted_cross_test_combination():
     # Two tests: 5/10 -> 0.5 normalized, 50/100 -> 0.5 normalized.
