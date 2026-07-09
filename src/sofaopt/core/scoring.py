@@ -1,7 +1,7 @@
 """Score normalization, aggregation, and progress reporting.
 
-The score pipeline has exactly one implementation and one order
-(dev_guidelines §11): per-run scores → :func:`aggregate_repeats` per test →
+The score pipeline has exactly one implementation and one order:
+per-run scores → :func:`aggregate_repeats` per test →
 :func:`normalize_test_score` by the test's ``max_score`` →
 :func:`combine_weighted` across tests → the 0–100 study objective.
 """

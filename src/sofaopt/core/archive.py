@@ -9,7 +9,7 @@ workspace reset: the orchestrator auto-archives any existing run before
 starting a fresh one, so starting a new run can never destroy a previous one.
 
 Comparison data derives ONLY from each archive's recorded scores
-(:mod:`sofaopt.core.results`) — never recomputed (dev_guidelines §11).
+(:mod:`sofaopt.core.results`) — never recomputed.
 """
 
 from __future__ import annotations

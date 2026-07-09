@@ -2,7 +2,7 @@
 
 All score reading/ranking logic lives in :mod:`sofaopt.core.results` — the
 dashboard must display exactly the scores the study recorded, never recompute
-its own (dev_guidelines §11).
+its own.
 """
 
 from __future__ import annotations

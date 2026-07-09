@@ -1,6 +1,6 @@
 """Pure-function tests for the scoring/aggregation/gating pipeline.
 
-This is the optimizer's correctness core (dev_guidelines §7/§11): it must be
+This is the optimizer's correctness core: it must be
 testable without a live optimization or a SOFA install.
 """
 

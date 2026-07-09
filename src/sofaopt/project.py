@@ -117,7 +117,9 @@ class TestSpec:
             ``max_run_relaunches`` (which must be > 0). Leave False for ordinary
             one-shot scenes.
         score_aggregation: How ``run_count`` repeats are combined into this
-            test's score: ``"mean"`` (default), ``"median"``, or ``"sum"``.
+            test's score: ``"mean"`` (default), ``"median"``, ``"sum"``, or
+            ``"exponential_coverage"`` (sum × 1.5 per additional positive
+            repeat — rewards covering many scenarios).
         default_selected: Whether the dashboard pre-selects this test.
     """
 

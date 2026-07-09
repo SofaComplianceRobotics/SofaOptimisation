@@ -1,6 +1,6 @@
 """Bootstrap helpers for any process that imports SOFA's Python bindings.
 
-Platform-specific setup isolated in one place (dev_guidelines §1): the scene
+Platform-specific setup isolated in one place: the scene
 runner, the offline video renderer, and the dashboard's summary-gen child all
 face the same three problems and must solve them identically:
 

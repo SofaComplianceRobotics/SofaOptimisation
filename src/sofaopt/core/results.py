@@ -6,8 +6,7 @@ The optimizer records each trial's outcome in ``trial_state.json``
 ``objective_values``). Everything that *displays or ranks* trials — the
 dashboard, video selection, summaries — must read those recorded values
 through this module, never recompute its own score: a recompute that drifts
-from the study objective silently lies about what the optimizer optimized
-(dev_guidelines §11).
+from the study objective silently lies about what the optimizer optimized.
 
 Reconstruction from raw run slots exists only as a fallback for legacy
 runtime dirs that predate the recorded summary fields.
