@@ -1,13 +1,16 @@
 # sofaopt
 
-**Parallel CMA-ES optimization and a live dashboard for [SOFA](https://www.sofa-framework.org/) simulations — bring your own scene, your own SOFA build.**
+**Parallel black-box optimization and a live dashboard for [SOFA](https://www.sofa-framework.org/) simulations — bring your own scene, your own SOFA build.**
 
 sofaopt drives the hard, generic part of optimizing a SOFA simulation:
 
-- samples parameters with **CMA-ES** (via Optuna),
-- runs many candidates **in parallel** as headless `runSofa` subprocesses,
+- samples parameters with **CMA-ES** (default), **GP Bayesian optimization**,
+  **TPE**, **Random**, or **NSGA-II** for multi-objective Pareto search (all via Optuna),
+- runs many candidates **in parallel** as headless `runSofa` subprocesses (or an
+  in-process Python runner with per-trial video recording),
 - collects, normalizes, weights and **aggregates scores** across multiple tests,
-- shows **live progress, leaderboards and parameter bounds** in a web dashboard.
+- shows **live progress, leaderboards, parameter importance and Pareto fronts**
+  in a web dashboard, and **archives runs** for later comparison.
 
 ---
 
@@ -60,20 +63,30 @@ launch_dashboard(PROJECT, port=8050) # web UI
 
 ## Optimizer settings
 
-The search is **CMA-ES** (via Optuna). A few fields on `SofaOptProject` control it:
+The search is controlled by fields on `SofaOptProject`. The full "which sampler,
+which knobs, and why" discussion lives in the
+[optimization guide](docs/optimization-guide.md); the surface:
 
 | Field | Default | What it does |
 |-------|---------|--------------|
-| `n_parallel` | 5 | CMA-ES population size — candidates per generation, run as parallel `runSofa` processes. |
+| `sampler` | `"cmaes"` | Search algorithm: `"cmaes"`, `"gp"` (Gaussian-process BO — sample-efficient for expensive sims, <20-D), `"tpe"`, or `"random"`. |
+| `n_parallel` | 5 | Population size — candidates per generation, run as parallel `runSofa` processes (≥ 4 for CMA-ES). |
 | `n_generations` | 100 | How many generations to run. |
-| `cmaes_startup_trials` | auto | **Random startup phase** (see below). `None` auto-sizes from the number of searched params (`resolve_startup_trials()`). |
+| `cmaes_startup_trials` | auto | **Space-filling startup phase** (see below). `None` auto-sizes from the number of searched params (`resolve_startup_trials()`). |
 | `cmaes_sigma0` | 1.0 | Initial spread (std-dev) of the search once CMA-ES begins. |
+| `cmaes_with_margin` | `False` | CMA-ES *with Margin* — keeps low-cardinality integer params from stagnating. |
+| `seed_sampler` | `"random"` | Startup design for `cmaes`/`gp`: `"sobol"` gives an evenly space-filling (QMC) design; `seed_sampler_seed` re-scrambles it for an independent exploration. |
+| `multi_objective` | `False` | Each test becomes a Pareto objective (NSGA-II); gating/weights disabled. |
+| `dedup_trials` | `False` | Reuse the recorded score of an identical completed candidate instead of re-simulating (deterministic objectives only). |
+| `stall_generations` | 0 | Stop early after N generations without best-score improvement (0 = off). |
+| `max_active_sofa_procs` | 12 | Hard cap on concurrent SOFA processes across all tests/repeats. |
 
-**Random startup phase.** CMA-ES needs a few evaluated points before its model is
-meaningful, so the **first `cmaes_startup_trials` trials are sampled uniformly at
-random** within each parameter's bounds; only after that does the CMA-ES
-algorithm take over (sampling around an adapting mean). Raise it for more upfront
-exploration on rugged landscapes, lower it to converge sooner.
+**Startup phase.** CMA-ES and GP need evaluated points before their model is
+meaningful, so the **first `cmaes_startup_trials` trials are sampled
+independently** (uniform random, or a Sobol' space-filling design with
+`seed_sampler="sobol"`) within each parameter's bounds; only after that does the
+model-based sampler take over. Raise it for more upfront exploration on rugged
+landscapes, lower it to converge sooner.
 
 Two related details:
 - **Starting point** — CMA-ES is *centered on each `ParamSpec`'s `default`*, not on
@@ -83,11 +96,11 @@ Two related details:
 
 **How a trial is scored.** Per run the scene writes one raw score. The pipeline
 then runs in exactly this order: repeats of a test are combined by its
-`score_aggregation` (`"mean"` | `"median"` | `"sum"`) → the per-test aggregate is
-normalized by `max_score` (clamped at 1.0) → tests are combined by `weight`
-(renormalized over the tests actually counted, e.g. when a gated test is
-skipped) → the 0–100 study objective. Every display (dashboard, videos) reads
-this recorded score — nothing recomputes its own.
+`score_aggregation` (`"mean"` | `"median"` | `"sum"` | `"exponential_coverage"`)
+→ the per-test aggregate is normalized by `max_score` (clamped at 1.0) → tests
+are combined by `weight` (renormalized over the tests actually counted, e.g.
+when a gated test is skipped) → the 0–100 study objective. Every display
+(dashboard, videos) reads this recorded score — nothing recomputes its own.
 
 **Failure semantics.** A trial whose prepare hook raises, or whose runs all
 crash, is reported to the optimizer as a real observation of
@@ -138,7 +151,11 @@ The web UI provides:
   appears next to the "Test it" button.
 - **"Generate Summary" button** — concatenates the top+bottom trial recordings into a
   single summary MP4.
-- **Live leaderboard, progress, parameter bounds, and Pareto front** tabs.
+- **Run controls** — Run, **Pause/Resume** (pausing tree-kills in-flight SOFA
+  processes; resuming re-evaluates the interrupted trials, which are excluded
+  from rankings), and **Stop & archive current run**.
+- **Live leaderboard, progress, parameter bounds, importance/interactions
+  (fANOVA), and Pareto front** tabs.
 - **Archives tab** — archive the current run (with a name and notes), restore or
   delete archives, and **compare runs**: overlaid best-so-far convergence curves
   plus a summary and best-params diff table.
@@ -172,9 +189,13 @@ A runnable example needing only a SOFA install with SofaPython3:
   and heavier. Uses a **prepare hook** that generates a scaled cube mesh per
   trial; the optimizer is rewarded for the cube touching the ground sooner, so it
   is incentivized to scale the cube up and make it heavier. Variants demonstrate
-  the TPE sampler, the Python runner with recording, multi-objective NSGA-II,
-  and OAT sensitivity analysis.
+  the TPE and GP samplers, the Sobol' startup design, the Python runner with
+  recording, multi-objective NSGA-II, and OAT sensitivity analysis.
 
-## Porting guide
+## Documentation
 
-_(full step-by-step guide — see [`docs/porting-guide.md`](docs/porting-guide.md))_
+- [`docs/porting-guide.md`](docs/porting-guide.md) — step-by-step: plug *your*
+  SOFA project in (scene contract, project file, prepare hooks, running).
+- [`docs/optimization-guide.md`](docs/optimization-guide.md) — choosing and
+  tuning the search: which sampler for which problem, budget/parallelism,
+  noise & repeats, scoring/gating, failure semantics, analyzing results.

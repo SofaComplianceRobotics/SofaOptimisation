@@ -2,7 +2,9 @@
 
 This guide takes you from an existing SOFA scene to a fully optimized,
 dashboard-driven project. You bring the simulation and the score; sofaopt
-brings CMA-ES, parallel execution, aggregation, gating, and the web UI.
+brings the samplers (CMA-ES, GP-BO, TPE, NSGA-II), parallel execution,
+aggregation, gating, and the web UI. Once your project runs, the
+[optimization guide](optimization-guide.md) covers making the search *good*.
 
 
 ---
@@ -235,110 +237,40 @@ cross-parameter relationships before use) and
 
 ---
 
-## 6. Tuning the search (CMA-ES)
+## 6. Tuning the search
 
-How thoroughly and how fast the optimizer searches is controlled entirely by a
-few fields on `SofaOptProject`. You set them when you build the project:
+How thoroughly and how fast the optimizer searches is controlled entirely by
+fields on `SofaOptProject`:
 
 ```python
 PROJECT = SofaOptProject(
     ...,
+    sampler="cmaes",          # or "gp", "tpe", "random"; multi_objective=True for NSGA-II
     n_parallel=6,             # population size  (also = concurrent runSofa procs)
-    n_generations=120,        # how many CMA-ES update steps
-    cmaes_startup_trials=24,  # random trials before CMA-ES takes over
-    cmaes_sigma0=0.3,         # initial search spread
+    n_generations=120,        # how many optimizer update steps
+    cmaes_sigma0=0.3,         # initial search spread (CMA-ES)
+    seed_sampler="sobol",     # space-filling startup design
     max_active_sofa_procs=12, # hard cap on concurrent SOFA processes
 )
 ```
 
-### The budget — how many simulations you're committing to
+The essentials:
 
-```
-trials evaluated      = n_parallel × n_generations
-runSofa launches      = trials × Σ(run_count over selected tests)
-```
+- **The budget** is `n_parallel × n_generations` trials, times
+  `Σ run_count` SOFA launches per trial — size `n_generations` to the time you
+  actually have.
+- **CMA-ES starts at your `ParamSpec` defaults** (`x0`), so set them to your
+  best-known design. Frozen params (`min == max`) are excluded from the search.
+- `n_parallel` must be **≥ 4** for CMA-ES (enforced).
+- Before the model-based sampler engages, a **startup phase** of
+  `cmaes_startup_trials` space-filling trials explores the space — `None`
+  (default) auto-sizes it from the searched dimensionality.
 
-So 6 × 120 = 720 candidates; if your one test has `run_count=3`, that's ~2160
-`runSofa` runs. Multiply by a typical scene's wall-time to estimate the run, and
-size `n_generations` to the time you actually have.
-
-### `n_parallel` — population size (λ)
-
-The number of candidates CMA-ES draws **per generation**, launched concurrently
-as separate `runSofa` processes. Two effects:
-
-- **Search quality:** CMA-ES estimates its next step from a whole population, so
-  bigger populations give a steadier, more robust update (better on noisy or
-  rugged landscapes) — at the cost of more simulations per generation.
-- **Parallelism:** it's also how many scenes run at once. Match it to the CPU
-  cores you can spare. Must be **≥ 4** (the framework enforces this — CMA-ES is
-  ill-defined below that).
-
-### `n_generations` — how long it refines
-
-The number of CMA-ES update steps. More generations = more refinement of the
-distribution toward good regions. This is your main "search longer" dial.
-
-### Where it starts — `x0` (your `ParamSpec` defaults)
-
-CMA-ES does **not** start from a random point: its initial mean is each
-parameter's `default`. So **set your defaults to your best-known / baseline
-design** and the search begins there and improves outward. Frozen params
-(`min == max`) are held fixed and excluded from the search.
-
-### `cmaes_startup_trials` — the random startup phase
-
-The **first `cmaes_startup_trials` completed trials are sampled uniformly at
-random** within each parameter's bounds; only afterwards does the CMA-ES
-algorithm take over. CMA-ES needs a handful of evaluated points before its
-covariance estimate means anything — this warm-up provides them.
-
-**Default is now `None` = auto-sized from dimensionality**
-(`project.resolve_startup_trials()`): the power of two nearest to `5·d`
-(CMA-ES) or `10·d` (GP-BO), with `d` = searched (non-frozen) params — powers
-of two because the Sobol' design is exactly balanced there. Adding or freezing
-parameters rescales the exploration phase automatically; set an explicit int
-to override.
-
-- It's effectively *"how many random trials first."* Because a generation is
-  `n_parallel` trials, setting it to `K × n_parallel` gives roughly **K fully
-  random generations** before CMA-ES engages.
-- **Rule of thumb:** at least one population (`≥ n_parallel`); a small multiple
-  (2–4×) for rugged or higher-dimensional problems. The framework default of
-  **50** suits a real project with many parameters; a 2-parameter toy is fine
-  with ~8.
-- Bigger = more upfront exploration (less likely to commit early to a poor
-  basin); smaller = converges sooner.
-
-### `cmaes_sigma0` — initial spread
-
-The initial standard deviation of the search distribution, in Optuna's
-internally-normalized parameter space (each range mapped to ~`[0, 1]`). So:
-
-- `1.0` (default) is **broad** — the first CMA-ES samples spread across most of
-  each parameter's range.
-- `0.2–0.3` starts **local**, clustered near your defaults (`x0`) — good when
-  you trust the baseline and want refinement rather than a global hunt.
-
-As the search proceeds CMA-ES adapts this spread automatically; `sigma0` only
-sets the starting width.
-
-### `max_active_sofa_procs` — concurrency safety cap
-
-Distinct from `n_parallel`: a single trial can launch several runs (multiple
-tests / repeats), so the number of *in-flight* SOFA processes can exceed the
-population. This caps the total concurrently, throttling new launches until
-others finish. Set it to roughly your core count (default 12).
-
-### Recipes
-
-- **Quick smoke test:** `n_parallel=4, n_generations=8, cmaes_startup_trials=8`.
-- **Real run:** `n_parallel=`cores-you-can-spare, `n_generations=100+`,
-  `cmaes_startup_trials=50`, `cmaes_sigma0=1.0`.
-- **Trust your baseline, want refinement:** keep defaults sharp, lower
-  `cmaes_sigma0` to ~`0.2` and `cmaes_startup_trials` to ~`n_parallel`.
-- **Rugged / many parameters:** raise `cmaes_startup_trials` and keep
-  `cmaes_sigma0` near `1.0` for wider exploration.
+Everything deeper — which sampler fits which problem (CMA-ES vs GP-BO vs TPE vs
+NSGA-II), the Sobol' startup design, `cmaes_sigma0` intuition, handling noisy
+scores (`run_count`/`score_aggregation`), duplicate caching, early stopping,
+and ready-made recipes — lives in the
+**[optimization guide](optimization-guide.md)**.
 
 ---
 
