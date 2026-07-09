@@ -20,7 +20,8 @@ Score = how early the bottom face crosses `y = 0` (earlier → higher).
 
 ## Run
 
-Install once: `pip install -e C:/dev/sofaopt[dashboard]`, then point at your SOFA.
+Install once from the repo root: `pip install -e .[dashboard]`, then point at
+your SOFA.
 
 **PowerShell** (Windows default shell — use `$env:`, not `export`):
 
@@ -31,6 +32,23 @@ $env:RUNSOFA_EXE = "$env:SOFA_ROOT/bin/runSofa.exe"
 python run.py        # headless - watch best size/mass climb each generation
 python dashboard.py  # or the web UI at http://localhost:8050
 ```
+
+### Variants
+
+```powershell
+python run.py --variant default    # CMA-ES / runSofa (this README's default)
+python run.py --variant tpe        # TPE Bayesian sampler
+python run.py --variant python     # in-process Python runner + trial recording
+python run.py --variant pareto     # multi-objective NSGA-II (fall_fast vs compact)
+python run.py --variant pareto-python  # multi-objective + Python runner
+python sensitivity_test.py         # OAT sensitivity analysis
+```
+
+Extras per variant: `default`/`tpe`/`pareto` need only the base install
+(`[dashboard]` for the web UI); `python` records videos and therefore needs
+`pip install -e .[video]` **and** `ffmpeg` on PATH; `sensitivity_test.py`
+needs the base install only, while the dashboard's Importance/Interactions
+tab needs `pip install -e .[analysis]`.
 
 **Git Bash / Linux / macOS:**
 

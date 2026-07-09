@@ -17,7 +17,12 @@ sofaopt drives the hard, generic part of optimizing a SOFA simulation:
 pip install -e .            # core optimizer
 pip install -e .[dashboard] # + web UI
 pip install -e .[preview]   # + STL preview rendering (shape projects)
+pip install -e .[video]     # + trial recording / video generation (pygame, PyOpenGL, ...)
+pip install -e .[analysis]  # + fANOVA importance & interaction analysis (scikit-learn)
 ```
+
+`ffmpeg` (for the `[video]` features) is an external tool: install it separately
+and make sure it is on `PATH`.
 
 sofaopt does **not** depend on SOFA as a Python package. It launches whatever
 `runSofa` you point it at, so any build with the `SofaPython3` plugin works.
@@ -76,9 +81,25 @@ Two related details:
 - Once CMA-ES is active it explores with spread `cmaes_sigma0` around that
   evolving center.
 
+**How a trial is scored.** Per run the scene writes one raw score. The pipeline
+then runs in exactly this order: repeats of a test are combined by its
+`score_aggregation` (`"mean"` | `"median"` | `"sum"`) → the per-test aggregate is
+normalized by `max_score` (clamped at 1.0) → tests are combined by `weight`
+(renormalized over the tests actually counted, e.g. when a gated test is
+skipped) → the 0–100 study objective. Every display (dashboard, videos) reads
+this recorded score — nothing recomputes its own.
+
+**Failure semantics.** A trial whose prepare hook raises, or whose runs all
+crash, is reported to the optimizer as a real observation of
+`hard_fail_score` (default −3.0) so the sampler learns to avoid that region.
+A trial killed by the `sofa_realtime_timeout` backstop is reported as
+*pruned* instead — a wall-clock timeout says the run wedged, not that the
+parameters were bad. This split is intentional.
+
 ## Trial recording (Python runner)
 
-When using `runner="python"`, set `record_frames=True` to capture a video of every trial:
+Requires the `[video]` extra and `ffmpeg` on PATH. When using
+`runner="python"`, set `record_frames=True` to capture a video of every trial:
 
 ```python
 PROJECT = SofaOptProject(
@@ -108,8 +129,11 @@ The web UI provides:
 
 - **Performance graph** — score over trials, click any point to select it
 - **"Test it" button** — click a trial in the graph then press "Test it" to launch
-  `runSofa` with that trial's params in the SOFA GUI (loads `SofaImGui` automatically).
-  Useful for visually inspecting how a candidate behaves.
+  `runSofa -g imgui` with that trial's params and the scene its first run used
+  (loads `SofaImGui` automatically). Useful for visually inspecting a candidate.
+  Viewer windows are attached to a kill-on-close job, so they never outlive the
+  dashboard; the headless optimization run itself is *not* — it survives closing
+  the dashboard.
 - **"View recording" link** — if the trial has a recorded `trial.mp4`, a direct link
   appears next to the "Test it" button.
 - **"Generate Summary" button** — concatenates the top+bottom trial recordings into a
@@ -122,7 +146,10 @@ A runnable example needing only a SOFA install with SofaPython3:
 
 - [`examples/cube_drop/`](examples/cube_drop/) — Demo: a cube falls and the optimizer learns to make it bigger
   and heavier. Uses a **prepare hook** that generates a scaled cube mesh per
-  trial, the optimiser is rewarded by having the cube touch the groun sooner, so is ensentivized to scale the cube and make it heavier
+  trial; the optimizer is rewarded for the cube touching the ground sooner, so it
+  is incentivized to scale the cube up and make it heavier. Variants demonstrate
+  the TPE sampler, the Python runner with recording, multi-objective NSGA-II,
+  and OAT sensitivity analysis.
 
 ## Porting guide
 

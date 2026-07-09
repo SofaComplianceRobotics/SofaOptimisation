@@ -93,8 +93,15 @@ Key properties:
 | `params` | `OPT_PARAMS_PATH` (a `params.json`) | this trial's sampled values |
 | `run_slot` | `OPT_RUN_SLOT` | which slot to write the score into |
 | `test_name` | `OPT_TEST_NAME` | which test is running |
+| `test_run_index`/`test_run_total` | `OPT_TEST_RUN_INDEX`/`OPT_TEST_RUN_TOTAL` | repeat i of N for this test |
 | `gen`/`trial`/`run` | `OPT_GEN`/`OPT_TRIAL`/`OPT_RUN` | identifiers |
+| `trial_state_path` | `OPT_TRIAL_STATE_PATH` | where scores are written; absent ⇒ `is_optimizing == False` |
 | `env["..."]` | prepare-hook env | e.g. `OPT_MESH` |
+
+The full key list (including the Python-runner recording keys
+`OPT_SOFA_PLUGINS` / `OPT_RECORD_*` and the dashboard override keys) lives in
+one place: [`src/sofaopt/core/envkeys.py`](../src/sofaopt/core/envkeys.py).
+Always import from there instead of retyping string literals.
 
 ---
 
@@ -147,8 +154,10 @@ PROJECT = SofaOptProject(
 - `scene_file` is launched via `runSofa`.
 - `run_count` — how many times to run this test per trial (e.g. several
   randomized scenarios). `score_aggregation` is how those repeats are combined
-  into the test's score: `"mean"` (default), `"median"`, or `"sum"`. Both are
-  fields on the `TestSpec`:
+  into the test's score: `"mean"` (default), `"median"`, `"sum"`, or
+  `"exponential_coverage"` (sum × 1.5 per additional *positive* repeat —
+  rewards candidates that succeed across many scenarios rather than excelling
+  in one). Both are fields on the `TestSpec`:
 
   ```python
   TestSpec("reach", scene_file=..., run_count=3, score_aggregation="mean", max_score=100)
@@ -157,6 +166,23 @@ PROJECT = SofaOptProject(
 - `max_score` normalizes the test to `[0,1]`; `weight` combines tests.
 - `gated=True`: only run this test once an *ungated* test has
   scored above zero for the candidate.
+
+### How scores combine (exact order)
+
+Per trial the pipeline is, in this order and nowhere else:
+
+1. each test's repeat scores → one per-test aggregate via `score_aggregation`;
+2. per-test aggregate → normalized by `max_score`, clamped at 1.0;
+3. normalized tests → combined by `weight`, renormalized over the tests
+   actually counted (a gated test that never unlocked is excluded);
+4. the result (0–100) is the study objective and is recorded in
+   `trial_state.json` (`final_score`) — the dashboard/videos read it verbatim.
+
+Failure semantics: prepare-hook exceptions and all-runs-crashed report
+`hard_fail_score` (default −3.0) to the sampler as a *real* observation;
+`sofa_realtime_timeout` kills report the trial as *pruned* (a wedge, not bad
+parameters). Crashed repeats among successful ones count as 0.0 within their
+test rather than failing the trial.
 
 ---
 
