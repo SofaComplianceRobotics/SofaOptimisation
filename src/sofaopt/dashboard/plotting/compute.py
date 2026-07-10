@@ -10,7 +10,7 @@ def _collect_all_test_names(records: list[dict]) -> list[str]:
     """Stable ordered list of every unique test name across all records."""
     seen: list[str] = []
     for r in records:
-        for name in (r.get("test_scores") or {}).keys():
+        for name in r.get("test_scores") or {}:
             if name not in seen:
                 seen.append(name)
     return seen
@@ -105,7 +105,7 @@ def compute_plot_data(records: list[dict], all_test_names: list[str]) -> dict:
 
 
 def _calculate_smart_ticks(
-    gen_tick_positions: list, gen_tick_labels: list, visible_range: tuple = None
+    gen_tick_positions: list, gen_tick_labels: list, visible_range: tuple | None = None
 ) -> tuple[list, list]:
     """Stride generation ticks to avoid crowding the X axis."""
     if not gen_tick_positions:

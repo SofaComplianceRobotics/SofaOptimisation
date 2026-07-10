@@ -32,7 +32,7 @@ def _start_proc(name: str, script: Path, env: dict | None = None) -> str:
         return "No run_script configured on the project (dashboard is read-only)."
     try:
         log_path = _log_dir() / f"{name}.log"
-        log_file = open(log_path, "w", encoding="utf-8")
+        log_file = open(log_path, "w", encoding="utf-8")  # noqa: SIM115  # handle feeds the child process and must outlive this function
         run_env = env if env is not None else os.environ.copy()
         run_env["PYTHONIOENCODING"] = "utf-8"
         python_exe = context.project().run_python_exe

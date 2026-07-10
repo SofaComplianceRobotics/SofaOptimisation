@@ -15,7 +15,7 @@ def _is_dominated(values: list[float], directions: list[str], candidates: list[l
         if other is values:
             continue
         dominated = True
-        for v, o, d in zip(values, other, directions):
+        for v, o, d in zip(values, other, directions, strict=True):
             if d == "maximize":
                 if v > o:
                     dominated = False
@@ -43,11 +43,11 @@ def _pareto_mask(
             # and strictly better in at least one.
             at_least_as_good = all(
                 (o >= v if d == "maximize" else o <= v)
-                for v, o, d in zip(values, other, directions)
+                for v, o, d in zip(values, other, directions, strict=True)
             )
             strictly_better = any(
                 (o > v if d == "maximize" else o < v)
-                for v, o, d in zip(values, other, directions)
+                for v, o, d in zip(values, other, directions, strict=True)
             )
             if at_least_as_good and strictly_better:
                 dominated = True
@@ -114,22 +114,22 @@ def build_pareto_figures(
         x_dir = directions[ix]
         y_dir = directions[iy]
 
-        dominated_x = [d["values"][ix] for d, opt in zip(trial_data, is_optimal) if not opt]
-        dominated_y = [d["values"][iy] for d, opt in zip(trial_data, is_optimal) if not opt]
-        dominated_gen = [d["gen"] for d, opt in zip(trial_data, is_optimal) if not opt]
+        dominated_x = [d["values"][ix] for d, opt in zip(trial_data, is_optimal, strict=True) if not opt]
+        dominated_y = [d["values"][iy] for d, opt in zip(trial_data, is_optimal, strict=True) if not opt]
+        dominated_gen = [d["gen"] for d, opt in zip(trial_data, is_optimal, strict=True) if not opt]
         dominated_text = [
             f"Trial {d['trial']} (gen {d['gen']})<br>"
             + "<br>".join(f"{k}: {v}" for k, v in d.get("params", {}).items())
-            for d, opt in zip(trial_data, is_optimal) if not opt
+            for d, opt in zip(trial_data, is_optimal, strict=True) if not opt
         ]
 
-        optimal_x = [d["values"][ix] for d, opt in zip(trial_data, is_optimal) if opt]
-        optimal_y = [d["values"][iy] for d, opt in zip(trial_data, is_optimal) if opt]
-        optimal_gen = [d["gen"] for d, opt in zip(trial_data, is_optimal) if opt]
+        optimal_x = [d["values"][ix] for d, opt in zip(trial_data, is_optimal, strict=True) if opt]
+        optimal_y = [d["values"][iy] for d, opt in zip(trial_data, is_optimal, strict=True) if opt]
+        optimal_gen = [d["gen"] for d, opt in zip(trial_data, is_optimal, strict=True) if opt]
         optimal_text = [
             f"Trial {d['trial']} (gen {d['gen']})<br>"
             + "<br>".join(f"{k}: {v}" for k, v in d.get("params", {}).items())
-            for d, opt in zip(trial_data, is_optimal) if opt
+            for d, opt in zip(trial_data, is_optimal, strict=True) if opt
         ]
 
         fig = go.Figure()

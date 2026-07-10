@@ -107,9 +107,11 @@ def _replace_with_retry(tmp: Path, path: Path, timeout_s: float = 1.0) -> None:
     try:
         os.replace(str(tmp), str(path))
         return
-    except Exception:
+    except Exception as final_exc:
         if last_exc:
-            raise last_exc
+            # Surface the retried failure; the final os.replace error stays
+            # attached as the explicit cause.
+            raise last_exc from final_exc
         raise
 
 

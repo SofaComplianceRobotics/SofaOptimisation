@@ -62,7 +62,7 @@ def combine_weighted(
     """
     return sum(
         normalize_test_score(score, max_scores[name]) * (weights[name] * 100)
-        for score, name in zip(per_test_scores, names)
+        for score, name in zip(per_test_scores, names, strict=True)
     )
 
 

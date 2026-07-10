@@ -41,8 +41,8 @@ def derive_sofa_root() -> str:
     if root:
         return root
 
-    for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep):
-        entry = entry.strip()
+    for raw_entry in os.environ.get("PYTHONPATH", "").split(os.pathsep):
+        entry = raw_entry.strip()
         if not entry:
             continue
         p = Path(entry)

@@ -123,7 +123,7 @@ def _spawn_summary_gen(project, summary_path: Path) -> subprocess.Popen:
     env = os.environ.copy()
     env.update({k: str(v) for k, v in project.sofa_env.items()})
     log_path = summary_path.parent / "summary_gen.log"
-    log_fh = open(log_path, "w", encoding="utf-8", errors="replace")
+    log_fh = open(log_path, "w", encoding="utf-8", errors="replace")  # noqa: SIM115  # handle feeds the child process and must outlive this function
     popen_kwargs: dict = {"stdin": subprocess.DEVNULL}
     if os.name == "nt":
         # CREATE_NEW_PROCESS_GROUP: keep Ctrl+C in the dashboard terminal from
@@ -297,9 +297,9 @@ def register_video_callbacks(app) -> None:
         if not _process_alive(pid):
             log_path = summary_path.parent / "summary_gen.log"
             try:
-                lines = [l for l in log_path.read_text(
+                lines = [ln for ln in log_path.read_text(
                     encoding="utf-8", errors="replace"
-                ).splitlines() if l.strip()]
+                ).splitlines() if ln.strip()]
                 error_msg = "\n".join(lines[-3:])
             except Exception:
                 error_msg = ""

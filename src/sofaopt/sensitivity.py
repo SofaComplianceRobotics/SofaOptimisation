@@ -136,7 +136,7 @@ def _build_samples(param: ParamSpec, n_samples: int) -> list[Any]:
     lo, hi = float(param.low), float(param.high)
     step = (hi - lo) / (n_samples - 1)
     if param.type == "int":
-        return sorted({int(round(lo + i * step)) for i in range(n_samples)})
+        return sorted({round(lo + i * step) for i in range(n_samples)})
     return [lo + i * step for i in range(n_samples)]
 
 

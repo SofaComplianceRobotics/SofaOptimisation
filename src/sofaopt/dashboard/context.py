@@ -21,7 +21,7 @@ _PROJECT: SofaOptProject | None = None
 
 
 def set_project(project: SofaOptProject) -> None:
-    global _PROJECT
+    global _PROJECT  # noqa: PLW0603  # module singleton, set once at dashboard launch
     _PROJECT = project
 
 

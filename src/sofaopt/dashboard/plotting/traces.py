@@ -18,7 +18,7 @@ def _build_bar_traces(records, plot_data, all_test_names):
         y_vals = []
         colors_list = []
         opacity_list = []
-        for x, contrib, failed, complete in zip(xs, contributions, failed_mask, is_complete):
+        for contrib, failed, complete in zip(contributions, failed_mask, is_complete, strict=True):
             y_vals.append(contrib.get(test_name, 0.0))
             colors_list.append(_test_color(test_name, all_test_names))
             alpha = 0.3 if failed else 1.0
@@ -88,7 +88,7 @@ def _build_final_ticks(plot_data, bar_width):
     final_scores = plot_data["final_scores"]
     x_segments, y_segments = [], []
     halfw = bar_width / 2.0
-    for x, s in zip(xs, final_scores):
+    for x, s in zip(xs, final_scores, strict=True):
         x_segments.extend([x - halfw, x + halfw, None])
         y_segments.extend([s, s, None])
     return go.Scatter(

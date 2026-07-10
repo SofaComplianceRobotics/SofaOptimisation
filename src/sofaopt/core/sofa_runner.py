@@ -27,7 +27,7 @@ SOFA_JOB_HANDLE = None
 
 def ensure_windows_sofa_job() -> None:
     """Create one kill-on-close Job Object for SOFA children (Windows only)."""
-    global SOFA_JOB_HANDLE
+    global SOFA_JOB_HANDLE  # noqa: PLW0603  # process-wide Job Object singleton, created once
     if os.name != "nt" or SOFA_JOB_HANDLE is not None:
         return
 
@@ -188,16 +188,15 @@ def launch_sofa(
     # One log per run slot next to trial_state.json, so early crashes are
     # diagnosable (overwritten on each relaunch).
     log_path = trial_state_path.parent / f"sofa_run{run_slot}.log"
-    log_file = open(log_path, "w", encoding="utf-8", errors="replace")
-    proc = subprocess.Popen(
-        cmd,
-        env=trial_env,
-        cwd=str(project.work_dir),
-        creationflags=creation_flags,
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-    )
-    log_file.close()
+    with open(log_path, "w", encoding="utf-8", errors="replace") as log_file:
+        proc = subprocess.Popen(
+            cmd,
+            env=trial_env,
+            cwd=str(project.work_dir),
+            creationflags=creation_flags,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
     attach_process_to_sofa_job(proc)
     return proc
 
@@ -213,8 +212,8 @@ def kill_process_tree(proc: subprocess.Popen) -> None:
     if os.name == "nt":
         try:
             subprocess.run(
-                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                capture_output=True, timeout=15,
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],  # noqa: S607  # Windows system tool, resolved from PATH
+                capture_output=True, timeout=15, check=False,
             )
         except Exception:
             pass

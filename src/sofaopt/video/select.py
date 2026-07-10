@@ -192,7 +192,7 @@ def generate_summary_video(
             tmp_dir = Path(tempfile.mkdtemp(prefix="sofaopt_sumovl_"))
             try:
                 overlaid: list[Path] = []
-                for i, (clip_path, rec) in enumerate(zip(cached_clips, clips)):
+                for i, (clip_path, rec) in enumerate(zip(cached_clips, clips, strict=True)):
                     ovl = tmp_dir / f"clip_{i:02d}.mp4"
                     try:
                         apply_text_overlay(

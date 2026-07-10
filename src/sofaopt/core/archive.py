@@ -198,9 +198,12 @@ def best_so_far_curve(trials_dir: Path) -> tuple[list[int], list[float]]:
     best: float | None = None
     for r in load_trial_records(trials_dir):
         score = r.get("final_score")
-        if not r.get("failed") and isinstance(score, (int, float)):
-            if best is None or score > best:
-                best = float(score)
+        if (
+            not r.get("failed")
+            and isinstance(score, (int, float))
+            and (best is None or score > best)
+        ):
+            best = float(score)
         if best is not None:
             xs.append(r["chron"] + 1)
             ys.append(best)

@@ -192,14 +192,14 @@ def register_optimise_callbacks(app) -> None:
         store = store or {}
         test_names: list[str] = []
         test_weights: dict[str, int] = {}
-        for checks, cid in zip(check_vals, check_ids):
+        for checks, cid in zip(check_vals, check_ids, strict=True):
             if checks:
                 name = cid["test"]
                 test_names.append(name)
                 test_weights[name] = int(store.get(name, 0))
 
         gated_names: list[str] = []
-        for checks, cid in zip(gate_vals, gate_ids):
+        for checks, cid in zip(gate_vals, gate_ids, strict=True):
             if checks and cid["test"] in test_names:
                 gated_names.append(cid["test"])
 

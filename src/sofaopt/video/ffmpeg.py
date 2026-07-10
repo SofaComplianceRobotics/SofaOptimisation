@@ -13,7 +13,7 @@ from pathlib import Path
 
 def _run_ffmpeg(cmd: list[str], what: str) -> None:
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     except FileNotFoundError as err:
         raise RuntimeError(
             "ffmpeg not found on PATH — install it (https://ffmpeg.org) or add "
