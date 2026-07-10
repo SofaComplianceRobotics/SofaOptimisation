@@ -13,17 +13,17 @@ from .scenes import build_scenes_tab
 from .styles import LOG_STYLE
 
 __all__ = [
-    "build_archives_tab",
-    "build_config_tab",
-    "build_scenes_tab",
-    "build_optimise_tab",
-    "build_performance_tab",
-    "build_playground_tab",
-    "build_param_bounds_tab",
-    "build_progress_tab",
-    "build_pareto_tab",
-    "build_interactions_tab",
     "LOG_STYLE",
     "PIE_PALETTE",
     "_equal_split",
+    "build_archives_tab",
+    "build_config_tab",
+    "build_interactions_tab",
+    "build_optimise_tab",
+    "build_param_bounds_tab",
+    "build_pareto_tab",
+    "build_performance_tab",
+    "build_playground_tab",
+    "build_progress_tab",
+    "build_scenes_tab",
 ]

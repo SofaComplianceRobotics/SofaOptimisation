@@ -44,24 +44,24 @@ from .project import (
 )
 
 __all__ = [
+    "DashboardTab",
     "ParamSpec",
-    "TestSpec",
-    "TrialPrep",
     "PrepareHook",
     "SofaOptProject",
-    "param_specs_from_dataclass",
-    "run_optimization",
-    "launch_dashboard",
-    "run_sensitivity_analysis",
+    "TestSpec",
+    "TrialPrep",
     "archive_run",
-    "list_archives",
-    "restore_archive",
+    "cleanup_trial_recordings",
     "delete_archive",
-    "generate_trial_video",
     "generate_selected_videos",
     "generate_summary_video",
-    "cleanup_trial_recordings",
-    "DashboardTab",
+    "generate_trial_video",
+    "launch_dashboard",
+    "list_archives",
+    "param_specs_from_dataclass",
+    "restore_archive",
+    "run_optimization",
+    "run_sensitivity_analysis",
 ]
 
 __version__ = "0.1.0"

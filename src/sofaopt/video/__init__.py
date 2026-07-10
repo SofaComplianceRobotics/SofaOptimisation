@@ -27,9 +27,9 @@ from sofaopt.video.select import (
 from sofaopt.video.single import generate_trial_video
 
 __all__ = [
-    "generate_trial_video",
+    "apply_generation_overlays",
+    "cleanup_trial_recordings",
     "generate_selected_videos",
     "generate_summary_video",
-    "cleanup_trial_recordings",
-    "apply_generation_overlays",
+    "generate_trial_video",
 ]

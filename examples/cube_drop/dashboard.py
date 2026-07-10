@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from project import (  # noqa: E402
+from project import (
     PROJECT,
     PROJECT_GP,
     PROJECT_MULTI_OBJ,
@@ -27,7 +27,7 @@ from project import (  # noqa: E402
     PROJECT_TPE,
 )
 
-from sofaopt import launch_dashboard  # noqa: E402
+from sofaopt import launch_dashboard
 
 _VARIANTS = {
     "default":       PROJECT,

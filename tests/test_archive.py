@@ -96,7 +96,7 @@ def test_restore_brings_run_back_and_protects_current(tmp_path):
     # ...and the 99.0 run was auto-archived, not destroyed.
     names = [a.name for a in list_archives(project)]
     assert any("auto_before_restore" in n for n in names)
-    assert all("old" != Path(n).name for n in names) or len(names) == 1
+    assert all(Path(n).name != "old" for n in names) or len(names) == 1
 
 
 def test_delete_refuses_paths_outside_archives(tmp_path):

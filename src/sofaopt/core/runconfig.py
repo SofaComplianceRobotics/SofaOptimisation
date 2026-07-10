@@ -11,12 +11,11 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Sequence
 
 from sofaopt.core import envkeys
-from sofaopt.project import ParamSpec, SofaOptProject, TestSpec
+from sofaopt.project import SofaOptProject, TestSpec
 
 
 @dataclass(frozen=True)

@@ -20,7 +20,6 @@ choose a ``sampler`` better suited to the active dimension count.
 from __future__ import annotations
 
 import logging
-import json
 import shutil
 import time
 from pathlib import Path

@@ -292,4 +292,4 @@ class ScoreWriter:
         return self._finished
 
 
-__all__ = ["Trial", "open_trial", "ScoreWriter"]
+__all__ = ["ScoreWriter", "Trial", "open_trial"]
