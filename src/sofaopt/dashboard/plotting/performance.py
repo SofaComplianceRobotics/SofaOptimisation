@@ -1,5 +1,6 @@
 """Performance graph and leaderboard."""
 
+import contextlib
 import logging
 import plotly.graph_objects as go
 
@@ -49,10 +50,9 @@ def _build_performance_graph(records: list[dict], summaries: list[dict]) -> go.F
             paper_bgcolor=C_BG,
             uirevision="performance-graph",
         )
-        try:
+        # Cosmetic animation only; transition support varies across plotly versions.
+        with contextlib.suppress(Exception):
             fig.layout.transition = dict(duration=600, easing="cubic-in-out")
-        except Exception:
-            pass
         return fig
     except Exception as exc:
         logger.warning(f"[warn] Error building performance graph: {exc}")

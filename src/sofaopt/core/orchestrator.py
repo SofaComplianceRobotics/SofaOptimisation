@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import dataclasses
 import os
@@ -212,10 +213,9 @@ def _run(project: SofaOptProject, cfg: RunConfig) -> None:
     # Windows consoles default to cp1252; make sure framework logging (and any
     # non-ASCII in scene output) never crashes the run on an encode error.
     for _stream in (sys.stdout, sys.stderr):
-        try:
+        # Non-reconfigurable stream (e.g. pytest capture) — keep the default.
+        with contextlib.suppress(Exception):
             _stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
 
     resuming = project.db_path.exists()
     if resuming:

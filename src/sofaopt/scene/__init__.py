@@ -22,6 +22,7 @@ same scene file still works for interactive debugging.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -221,10 +222,9 @@ class ScoreWriter:
 
     def _now(self) -> float:
         if self.rootnode is not None:
-            try:
+            # Fall through to wall clock when the scene has no readable time.
+            with contextlib.suppress(Exception):
                 return float(self.rootnode.time.value)
-            except Exception:
-                pass
         return time.time()
 
     def _update_trial_state_run(self, payload: dict[str, Any]) -> bool:
@@ -278,10 +278,9 @@ class ScoreWriter:
 
     def _stop(self) -> None:
         if self.rootnode is not None:
-            try:
+            # Best-effort pause; the kill below is what actually stops the run.
+            with contextlib.suppress(Exception):
                 self.rootnode.animate = False
-            except Exception:
-                pass
         # Only hard-kill under the optimizer; an interactive (hand-launched)
         # run has no trial_state_path and should just pause, not exit.
         if self.trial_state_path is not None:

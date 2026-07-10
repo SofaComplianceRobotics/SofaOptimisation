@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from pathlib import Path
 
@@ -130,10 +131,10 @@ def recover_interrupted_trials(study: optuna.Study) -> int:
         if t.params:
             study.enqueue_trial(t.params)
             count += 1
-        try:
+        # The stale RUNNING record may already be closed by a concurrent
+        # resume; the enqueue above is what matters.
+        with contextlib.suppress(Exception):
             study.tell(t.number, state=optuna.trial.TrialState.FAIL)
-        except Exception:
-            pass
     return count
 
 

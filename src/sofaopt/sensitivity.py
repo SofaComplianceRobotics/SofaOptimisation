@@ -19,6 +19,7 @@ choose a ``sampler`` better suited to the active dimension count.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 import time
@@ -191,10 +192,9 @@ def _score_one_sample(
     wait_or_kill(proc, project.sofa_realtime_timeout)
 
     for asset in prep.cleanup:
-        try:
+        # Best-effort temp-asset cleanup; a locked file must not fail the sweep.
+        with contextlib.suppress(Exception):
             Path(asset).unlink(missing_ok=True)
-        except Exception:
-            pass
 
     run_data = read_trial_run(trial_state_path, 1) or {}
     raw = run_data.get("score")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import sys
@@ -234,10 +235,9 @@ def launch_dashboard(
 
     configure_console_logging()
     for _stream in (sys.stdout, sys.stderr):
-        try:
+        # Non-reconfigurable stream (e.g. pytest capture) — keep the default.
+        with contextlib.suppress(Exception):
             _stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
     logger.info(f"[info] Starting {project.title or project.name} on http://localhost:{port}")
     os.environ["WERKZEUG_RUN_MAIN"] = "false"
     os.environ.pop("WERKZEUG_SERVER_FD", None)

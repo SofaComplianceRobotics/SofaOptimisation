@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import json
 
@@ -23,7 +24,8 @@ def _load_trial_param_values() -> list[dict]:
     """Read the per-trial params.json files written by the optimizer (latest 40)."""
     trials_dir = context.trials_dir()
     paths = []
-    try:
+    # Trial dirs appear/move mid-scan during a live run; a partial list is fine.
+    with contextlib.suppress(Exception):
         for gen_dir in sorted(
             trials_dir.glob("gen_*"),
             key=lambda d: int(d.name.split("_")[1]) if len(d.name.split("_")) > 1 else 0,
@@ -35,15 +37,12 @@ def _load_trial_param_values() -> list[dict]:
                 p = trial_dir / "params.json"
                 if p.exists():
                     paths.append(p)
-    except Exception:
-        pass
 
     configs = []
     for p in paths[-40:]:
-        try:
+        # Mid-write/partial params.json is expected while the optimizer runs.
+        with contextlib.suppress(Exception):
             configs.append(json.loads(p.read_text(encoding="utf-8")))
-        except Exception:
-            pass
     return configs
 
 

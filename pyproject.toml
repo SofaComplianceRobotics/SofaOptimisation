@@ -58,6 +58,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"] # pytest asserts
+# In-run frame recorder: per-step best-effort GL/ffmpeg probing. Recording must
+# never fail a trial, and logging every animation step would spam the run log.
+"src/sofaopt/scene/frame_recorder.py" = ["S110", "SIM105"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

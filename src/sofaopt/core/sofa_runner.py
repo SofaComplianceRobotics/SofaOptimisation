@@ -8,6 +8,7 @@ never outlive the optimizer.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import json
 import os
@@ -210,17 +211,15 @@ def kill_process_tree(proc: subprocess.Popen) -> None:
     every kill in core and dashboard.
     """
     if os.name == "nt":
-        try:
+        # Best-effort tree kill; proc.kill() below is the fallback.
+        with contextlib.suppress(Exception):
             subprocess.run(
                 ["taskkill", "/PID", str(proc.pid), "/T", "/F"],  # noqa: S607  # Windows system tool, resolved from PATH
                 capture_output=True, timeout=15, check=False,
             )
-        except Exception:
-            pass
-    try:
+    # Direct child may already be gone — that's the goal.
+    with contextlib.suppress(Exception):
         proc.kill()
-    except Exception:
-        pass
 
 
 def wait_or_kill(proc: subprocess.Popen, timeout_s: float, kill_grace_s: float = 5.0) -> bool:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -116,11 +117,10 @@ def stop_optimize_and_wait(timeout_s: float = 15.0) -> bool:
     proc = _PROCS.get("optimize")
     if proc is None or proc.poll() is not None:
         return True
-    try:
+    # Best-effort stop; the poll() below decides the outcome either way.
+    with contextlib.suppress(Exception):
         kill_process_tree(proc)
         proc.wait(timeout=timeout_s)
-    except Exception:
-        pass
     if proc.poll() is not None:
         _PROCS["optimize"] = None
         return True

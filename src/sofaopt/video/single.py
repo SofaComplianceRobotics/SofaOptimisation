@@ -13,7 +13,7 @@ import importlib.util
 import json
 import os
 import shutil
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -152,12 +152,11 @@ def _capture_loop(
 
         step += 1
 
-        # Check after capturing so the final frame (e.g. cube on floor) is included
-        try:
+        # Check after capturing so the final frame (e.g. cube on floor) is included.
+        # A scene without a readable animate flag just runs to the step cap.
+        with suppress(Exception):
             if not root.animate.value:
                 break
-        except Exception:
-            pass
     return step, captured
 
 
@@ -239,13 +238,13 @@ def generate_trial_video(
     )
     pygame.display.set_caption("sofaopt video render")
     if os.name == "nt":
-        try:
+        # Cosmetic only: hide the render window; rendering works either way.
+        with suppress(Exception):
             import ctypes
             hwnd = pygame.display.get_wm_info().get("window", 0)
             if hwnd:
                 ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
-        except Exception:
-            pass
+
 
     Sofa.SofaGL.glewInit()
     Sofa.Simulation.initVisual(root)

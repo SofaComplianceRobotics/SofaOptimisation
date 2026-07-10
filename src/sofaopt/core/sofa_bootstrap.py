@@ -17,6 +17,7 @@ stdlib-only: safe to import inside the SofaPython3 interpreter.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from pathlib import Path
@@ -25,10 +26,9 @@ from pathlib import Path
 def reconfigure_streams_utf8() -> None:
     """Make stdout/stderr survive non-ASCII output on cp1252 consoles."""
     for stream in (sys.stdout, sys.stderr):
-        try:
+        # Non-reconfigurable stream (e.g. pytest capture) — fine.
+        with contextlib.suppress(Exception):
             stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass  # non-reconfigurable stream (e.g. pytest capture) — fine
 
 
 def derive_sofa_root() -> str:

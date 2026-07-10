@@ -46,7 +46,7 @@ def load_trial_records(trials_dir: Path) -> list[dict]:
                 continue
             try:
                 trial_state = json.loads(trial_state_path.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception:  # noqa: S112  # mid-write/partial JSON is expected during a live run
                 continue
             if not isinstance(trial_state, dict):
                 continue
@@ -92,7 +92,7 @@ def load_gen_summaries(trials_dir: Path) -> list[dict]:
                     "n_valid": data.get("n_valid"),
                 }
             )
-        except Exception:
+        except Exception:  # noqa: S112  # mid-write/partial JSON is expected during a live run
             continue
     return summaries
 
