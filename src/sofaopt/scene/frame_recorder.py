@@ -315,22 +315,27 @@ class FrameRecorder:
         if not raw:
             return
 
-        if self._ffmpeg.stdin:
-            try:
-                self._ffmpeg.stdin.write(raw)
-                self._ffmpeg.stdin.flush()
-            except (BrokenPipeError, OSError):
-                try:  # ffmpeg died; reap it before dropping the reference
-                    self._ffmpeg.wait(timeout=1)
-                except Exception:
-                    pass
-                self._ffmpeg = None
+        self._pipe_frame(raw)
 
         if self._pygame:
             try:
                 self._pygame.display.flip()
             except Exception:
                 pass
+
+    def _pipe_frame(self, raw: bytes) -> None:
+        """Write one raw frame to ffmpeg; a dead encoder disables recording."""
+        if not self._ffmpeg.stdin:
+            return
+        try:
+            self._ffmpeg.stdin.write(raw)
+            self._ffmpeg.stdin.flush()
+        except OSError:  # includes BrokenPipeError
+            try:  # ffmpeg died; reap it before dropping the reference
+                self._ffmpeg.wait(timeout=1)
+            except Exception:
+                pass
+            self._ffmpeg = None
 
     def close(self) -> None:
         """Flush and wait for ffmpeg. Only called on clean (non-SIGKILL) exits."""

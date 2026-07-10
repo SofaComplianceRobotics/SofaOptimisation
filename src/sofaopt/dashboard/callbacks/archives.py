@@ -157,7 +157,7 @@ def _summary_children(entries) -> list:
     return children
 
 
-def register_archives_callbacks(app) -> None:
+def register_archives_callbacks(app) -> None:  # noqa: C901  # Dash registrar: total is the sum of its small nested callbacks; the flat registration list reads best in one place
     @app.callback(
         Output("archives-table", "children"),
         Output("archive-compare-select", "options"),

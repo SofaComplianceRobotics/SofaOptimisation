@@ -209,15 +209,7 @@ def run_optimization(
         release_run_lock(lock)
 
 
-def _run(project: SofaOptProject, cfg: RunConfig) -> None:
-    # Windows consoles default to cp1252; make sure framework logging (and any
-    # non-ASCII in scene output) never crashes the run on an encode error.
-    for _stream in (sys.stdout, sys.stderr):
-        # Non-reconfigurable stream (e.g. pytest capture) — keep the default.
-        with contextlib.suppress(Exception):
-            _stream.reconfigure(encoding="utf-8", errors="replace")
-
-    resuming = project.db_path.exists()
+def _prepare_runtime_dirs(project: SofaOptProject, resuming: bool) -> None:
     if resuming:
         project.trials_dir.mkdir(parents=True, exist_ok=True)
         project.previews_dir.mkdir(parents=True, exist_ok=True)
@@ -232,23 +224,73 @@ def _run(project: SofaOptProject, cfg: RunConfig) -> None:
             logger.info(f"[archive] Previous run auto-archived to {archived.name}")
         reset_trials_dir(project.trials_dir, project.previews_dir)
 
+
+def _recover_resumed_study(study, project: SofaOptProject, gen_offset: int) -> None:
+    # A pause/kill mid-generation leaves asked-but-unscored trials behind:
+    # re-enqueue their params (they run first in the next generation) and
+    # close the stale records both in Optuna and on disk.
+    recovered = recover_interrupted_trials(study)
+    _mark_interrupted_on_disk(project.trials_dir)
+    if recovered:
+        logger.info(
+            f"[resume] Re-enqueued {recovered} interrupted trial(s) — "
+            f"they run first in generation {gen_offset + 1}."
+        )
+
+
+def _apply_overlays_safely(project: SofaOptProject, gen: int) -> None:
+    """Text overlays are a nicety — a failed pass must never kill the run."""
+    try:
+        from sofaopt.video import apply_generation_overlays
+        apply_generation_overlays(project, gen)
+    except Exception as exc:
+        logger.info(f"[video] Gen {gen}: overlay pass failed: {exc}")
+
+
+class _StallTracker:
+    """Early stop: no best-score improvement for ``limit`` generations in a row.
+
+    A generation without a valid best (all trials failed) counts as stalled.
+    Disabled when ``limit`` is 0 (also used for multi-objective runs, where a
+    single scalar "best" does not exist).
+    """
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.best: float | None = None
+        self.count = 0
+
+    def should_stop(self, study) -> bool:
+        if self.limit <= 0:
+            return False
+        try:
+            current: float | None = float(study.best_value)
+        except ValueError:
+            current = None
+        if current is not None and (self.best is None or current > self.best + 1e-9):
+            self.best, self.count = current, 0
+            return False
+        self.count += 1
+        return self.count >= self.limit
+
+
+def _run(project: SofaOptProject, cfg: RunConfig) -> None:
+    # Windows consoles default to cp1252; make sure framework logging (and any
+    # non-ASCII in scene output) never crashes the run on an encode error.
+    for _stream in (sys.stdout, sys.stderr):
+        # Non-reconfigurable stream (e.g. pytest capture) — keep the default.
+        with contextlib.suppress(Exception):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+
+    resuming = project.db_path.exists()
+    _prepare_runtime_dirs(project, resuming)
     study = build_study(project.db_path, cfg, resume=resuming)
 
     # When resuming, continue generation numbering from the dirs actually on
     # disk (see runtime_dirs.last_gen_index for why not the Optuna trial count).
     gen_offset = last_gen_index(project.trials_dir) if resuming else 0
-
     if resuming:
-        # A pause/kill mid-generation leaves asked-but-unscored trials behind:
-        # re-enqueue their params (they run first in the next generation) and
-        # close the stale records both in Optuna and on disk.
-        recovered = recover_interrupted_trials(study)
-        _mark_interrupted_on_disk(project.trials_dir)
-        if recovered:
-            logger.info(
-                f"[resume] Re-enqueued {recovered} interrupted trial(s) — "
-                f"they run first in generation {gen_offset + 1}."
-            )
+        _recover_resumed_study(study, project, gen_offset)
 
     env = cfg.base_scene_env()
     history = RunHistory()
@@ -256,8 +298,7 @@ def _run(project: SofaOptProject, cfg: RunConfig) -> None:
     prune_count = 0  # how many periodic recording prunes have fired
 
     total_gens = gen_offset + project.n_generations
-    stall_best: float | None = None
-    stall_gens = 0
+    stall = _StallTracker(0 if project.multi_objective else project.stall_generations)
     for gen in range(gen_offset + 1, total_gens + 1):
         write_progress(cfg, gen, 0, history.all_scores, started_at, total_gens=total_gens)
         logger.info(f"\n{'=' * 50}\nGeneration {gen}/{total_gens}\n{'=' * 50}")
@@ -266,33 +307,17 @@ def _run(project: SofaOptProject, cfg: RunConfig) -> None:
         run_generation(cfg, gen, trials, study, env, history, started_at, total_gens=total_gens)
 
         if project.record_frames:
-            try:
-                from sofaopt.video import apply_generation_overlays
-                apply_generation_overlays(project, gen)
-            except Exception as exc:
-                logger.info(f"[video] Gen {gen}: overlay pass failed: {exc}")
+            _apply_overlays_safely(project, gen)
 
         _print_best_so_far(study, project)
         prune_count = _maybe_prune_recordings(project, gen, prune_count)
 
-        # Early stop: no best-score improvement for stall_generations in a row.
-        if project.stall_generations > 0 and not project.multi_objective:
-            try:
-                current_best = float(study.best_value)
-            except ValueError:
-                current_best = None
-            if current_best is not None and (
-                stall_best is None or current_best > stall_best + 1e-9
-            ):
-                stall_best, stall_gens = current_best, 0
-            else:
-                stall_gens += 1
-                if stall_gens >= project.stall_generations:
-                    logger.info(
-                        f"[stall] Best score unchanged for {stall_gens} generations "
-                        f"— stopping early at generation {gen}/{total_gens}."
-                    )
-                    break
+        if stall.should_stop(study):
+            logger.info(
+                f"[stall] Best score unchanged for {stall.count} generations "
+                f"— stopping early at generation {gen}/{total_gens}."
+            )
+            break
 
     logger.info("\nOptimization complete.")
     if project.record_frames:

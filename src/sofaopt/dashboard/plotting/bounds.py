@@ -46,6 +46,76 @@ def _load_trial_param_values() -> list[dict]:
     return configs
 
 
+def _density_heatmap(active_specs: list[dict], trial_configs: list[dict]) -> go.Heatmap:
+    """Per-parameter histogram of sampled values, row-normalized to [0, 1]."""
+    nbins = 64
+    bin_centers = [(i + 0.5) / nbins for i in range(nbins)]
+    z_rows = []
+    for spec in active_specs:
+        name = spec["name"]
+        span = (spec["max"] - spec["min"]) or 1.0
+        counts = [0] * nbins
+        total = 0
+        for cfg in trial_configs:
+            v = cfg.get(name)
+            if isinstance(v, (int, float)):
+                norm = max(0.0, min(1.0, (v - spec["min"]) / span))
+                idx = min(int(norm * nbins), nbins - 1)
+                counts[idx] += 1
+                total += 1
+        maxc = max(counts) if counts else 0
+        z_rows.append([c / maxc if maxc > 0 else 0.0 for c in counts] if total else [0.0] * nbins)
+    return go.Heatmap(
+        x=bin_centers,
+        y=[spec["name"] for spec in active_specs],
+        z=z_rows,
+        colorscale="YlOrRd",
+        showscale=False,
+        hovertemplate="%{y}<br>Value: %{x:.2f}<br>Rel. density: %{z:.2f}<extra></extra>",
+        zmin=0,
+        zmax=1,
+    )
+
+
+def _add_latest_markers(fig: go.Figure, active_specs: list[dict], latest_config: dict | None) -> None:
+    """Diamond marker(s) + value annotation for the latest trial, per parameter."""
+    for spec in active_specs:
+        name = spec["name"]
+        param_min, param_max = spec["min"], spec["max"]
+        span = (param_max - param_min) or 1.0
+        values: list[float] = []
+        if latest_config is not None:
+            v = latest_config.get(name)
+            if isinstance(v, (int, float)):
+                values = [float(v)]
+            elif isinstance(v, (list, tuple)):
+                values = [float(x) for x in v if isinstance(x, (int, float))]
+        if not values:
+            values = [(param_min + param_max) / 2]
+
+        marker_xs = [max(0.0, min(1.0, (val - param_min) / span)) for val in values]
+        side_texts = [f"{val:.3f}" for val in values]
+        if marker_xs:
+            fig.add_trace(
+                go.Scatter(
+                    x=marker_xs,
+                    y=[name] * len(marker_xs),
+                    mode="markers",
+                    marker=dict(symbol="diamond", size=12, color="#ffffff", line=dict(width=2, color="#212121")),
+                    hovertemplate=(
+                        f"<b>{name}</b><br>Current: " + ", ".join(side_texts)
+                        + f"<br>Min: {param_min:.3f} | Max: {param_max:.3f}<extra></extra>"
+                    ),
+                    showlegend=False,
+                )
+            )
+            fig.add_annotation(
+                x=1.02, y=name, text="[" + ", ".join(side_texts) + "]",
+                showarrow=False, xanchor="left", yanchor="middle",
+                font=dict(size=11, color="#111"),
+            )
+
+
 def _build_param_bounds_graph(show_heatmap: bool = False) -> go.Figure:
     """Heatmap of sampled values + a marker for the latest trial, per parameter."""
     try:
@@ -59,71 +129,8 @@ def _build_param_bounds_graph(show_heatmap: bool = False) -> go.Figure:
         fig = go.Figure()
 
         if trial_configs:
-            nbins = 64
-            bin_centers = [(i + 0.5) / nbins for i in range(nbins)]
-            z_rows = []
-            for spec in active_specs:
-                name = spec["name"]
-                span = (spec["max"] - spec["min"]) or 1.0
-                counts = [0] * nbins
-                total = 0
-                for cfg in trial_configs:
-                    v = cfg.get(name)
-                    if isinstance(v, (int, float)):
-                        norm = max(0.0, min(1.0, (v - spec["min"]) / span))
-                        idx = min(int(norm * nbins), nbins - 1)
-                        counts[idx] += 1
-                        total += 1
-                maxc = max(counts) if counts else 0
-                z_rows.append([c / maxc if maxc > 0 else 0.0 for c in counts] if total else [0.0] * nbins)
-            fig.add_trace(
-                go.Heatmap(
-                    x=bin_centers,
-                    y=param_names,
-                    z=z_rows,
-                    colorscale="YlOrRd",
-                    showscale=False,
-                    hovertemplate="%{y}<br>Value: %{x:.2f}<br>Rel. density: %{z:.2f}<extra></extra>",
-                    zmin=0,
-                    zmax=1,
-                )
-            )
-
-        for spec in active_specs:
-            name = spec["name"]
-            param_min, param_max = spec["min"], spec["max"]
-            span = (param_max - param_min) or 1.0
-            values: list[float] = []
-            if latest_config is not None:
-                v = latest_config.get(name)
-                if isinstance(v, (int, float)):
-                    values = [float(v)]
-                elif isinstance(v, (list, tuple)):
-                    values = [float(x) for x in v if isinstance(x, (int, float))]
-            if not values:
-                values = [(param_min + param_max) / 2]
-
-            marker_xs = [max(0.0, min(1.0, (val - param_min) / span)) for val in values]
-            side_texts = [f"{val:.3f}" for val in values]
-            if marker_xs:
-                fig.add_trace(
-                    go.Scatter(
-                        x=marker_xs,
-                        y=[name] * len(marker_xs),
-                        mode="markers",
-                        marker=dict(symbol="diamond", size=12, color="#ffffff", line=dict(width=2, color="#212121")),
-                        hovertemplate=(
-                            f"<b>{name}</b><br>Current: " + ", ".join(side_texts)
-                            + f"<br>Min: {param_min:.3f} | Max: {param_max:.3f}<extra></extra>"
-                        ),
-                        showlegend=False,
-                    )
-                )
-                fig.add_annotation(
-                    x=1.02, y=name, text="[" + ", ".join(side_texts) + "]",
-                    showarrow=False, xanchor="left", yanchor="middle",
-                    font=dict(size=11, color="#111"),
-                )
+            fig.add_trace(_density_heatmap(active_specs, trial_configs))
+        _add_latest_markers(fig, active_specs, latest_config)
 
         row_h = 70 if show_heatmap else 52
         fig.update_layout(

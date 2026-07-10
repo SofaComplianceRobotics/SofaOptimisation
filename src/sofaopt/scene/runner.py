@@ -28,12 +28,8 @@ from sofaopt.core.sofa_bootstrap import (
 )
 
 
-def main(scene_path: str) -> None:
-    # Windows console uses cp1252 by default; SOFA and pygame may print non-ASCII.
-    reconfigure_streams_utf8()
-
-    # Must run before the first SofaRuntime import (Windows DLL search rules).
-    register_sofa_dll_dirs()
+def _import_sofa():
+    """Import the SOFA bindings, exiting with a diagnosable message when absent."""
     try:
         import SofaRuntime
         import Sofa.Core
@@ -44,7 +40,10 @@ def main(scene_path: str) -> None:
             f"Ensure SOFA's site-packages directory is on PYTHONPATH "
             f"and SOFA_ROOT points to the build root. ({exc})"
         ) from exc
+    return SofaRuntime, Sofa
 
+
+def _load_plugins(SofaRuntime) -> None:
     plugins = json.loads(os.environ.get(envkeys.SOFA_PLUGINS, "[]"))
     sofa_root = os.environ.get("SOFA_ROOT", "")
     if sofa_root:
@@ -55,6 +54,8 @@ def main(scene_path: str) -> None:
         except Exception as e:
             print(f"[runner] Warning: could not load plugin {plugin!r}: {e}", flush=True)
 
+
+def _load_scene_module(scene_path: str):
     spec = importlib.util.spec_from_file_location("_sofaopt_scene", scene_path)
     if spec is None or spec.loader is None:
         raise SystemExit(f"[runner] Cannot load scene: {scene_path}")
@@ -64,20 +65,39 @@ def main(scene_path: str) -> None:
 
     if not hasattr(mod, "createScene"):
         raise SystemExit(f"[runner] Scene has no createScene() function: {scene_path}")
+    return mod
 
+
+def _setup_recorder(root):
+    """FrameRecorder when OPT_RECORD_FRAMES=1, else None.
+
+    Wrapped entirely in try/except: a recording failure must never fail the trial.
+    """
+    if os.environ.get(envkeys.RECORD_FRAMES) != "1":
+        return None
+    try:
+        from sofaopt.scene.frame_recorder import FrameRecorder, inject_camera_and_lights
+        inject_camera_and_lights(root)   # must be before initRoot
+        return FrameRecorder.from_env()
+    except Exception as exc:
+        print(f"[runner] Recording setup failed, disabled: {exc}", flush=True)
+        return None
+
+
+def main(scene_path: str) -> None:
+    # Windows console uses cp1252 by default; SOFA and pygame may print non-ASCII.
+    reconfigure_streams_utf8()
+
+    # Must run before the first SofaRuntime import (Windows DLL search rules).
+    register_sofa_dll_dirs()
+    SofaRuntime, Sofa = _import_sofa()
+    _load_plugins(SofaRuntime)
+
+    mod = _load_scene_module(scene_path)
     root = Sofa.Core.Node("root")
     mod.createScene(root)
 
-    # Frame recording — only when OPT_RECORD_FRAMES=1 is set.
-    # Wrapped entirely in try/except: a recording failure must never fail the trial.
-    recorder = None
-    if os.environ.get(envkeys.RECORD_FRAMES) == "1":
-        try:
-            from sofaopt.scene.frame_recorder import FrameRecorder, inject_camera_and_lights
-            inject_camera_and_lights(root)   # must be before initRoot
-            recorder = FrameRecorder.from_env()
-        except Exception as exc:
-            print(f"[runner] Recording setup failed, disabled: {exc}", flush=True)
+    recorder = _setup_recorder(root)
 
     Sofa.Simulation.initRoot(root)
 

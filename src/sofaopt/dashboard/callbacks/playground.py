@@ -238,7 +238,7 @@ def _run_outputs(runs: list[dict]):
     return options, new_idx, max_frame
 
 
-def register_playground_callbacks(app) -> None:
+def register_playground_callbacks(app) -> None:  # noqa: C901  # Dash registrar: total is the sum of its small nested callbacks; the flat registration list reads best in one place
     """Register all Playground-tab callbacks."""
 
     # Show only the hyperparameter rows relevant to the chosen algorithm.

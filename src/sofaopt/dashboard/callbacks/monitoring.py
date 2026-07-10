@@ -41,7 +41,7 @@ def register_pareto_callbacks(app) -> None:
         return build_pareto_layout(done, test_names, directions)
 
 
-def register_monitoring_callbacks(app) -> None:
+def register_monitoring_callbacks(app) -> None:  # noqa: C901  # Dash registrar: total is the sum of its small nested callbacks; the flat registration list reads best in one place
     """Register performance graph, progress grid, bounds, and jump controls."""
 
     @app.callback(

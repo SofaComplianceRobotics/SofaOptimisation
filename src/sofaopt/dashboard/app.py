@@ -114,37 +114,8 @@ def create_app(
         ],
     )
 
-    tab_defs = []
-    if project.config_file is not None:
-        tab_defs.append(("Config", "config", build_config_tab()))
-    tab_defs += [
-        ("Scenes", "scenes", build_scenes_tab(catalog)),
-        ("Optimise", "optimise", build_optimise_tab(catalog)),
-        ("Performance", "performance", build_performance_tab()),
-        ("Progress", "progress", build_progress_tab()),
-        ("Parameter Bounds", "bounds", build_param_bounds_tab()),
-        ("Playground", "playground", build_playground_tab()),
-    ]
-    # Interaction analysis needs a scalar objective; skip in Pareto mode.
-    if not project.multi_objective:
-        tab_defs.append(("Importance / Interactions", "interactions", build_interactions_tab()))
-    if project.multi_objective:
-        tab_defs.append(("Pareto Front", "pareto", build_pareto_tab()))
-    tab_defs.append(("Archives", "archives", build_archives_tab()))
-
     hidden = set(hide_tabs)
-    tab_defs = [t for t in tab_defs if t[1] not in hidden]
-
-    for tab in extra_tabs:
-        entry = (tab.label, tab.value, tab.build())
-        anchor = next(
-            (i for i, t in enumerate(tab_defs) if t[1] == tab.before), None
-        )
-        if anchor is None:
-            tab_defs.append(entry)
-        else:
-            tab_defs.insert(anchor, entry)
-
+    tab_defs = _build_tab_defs(project, catalog, extra_tabs, hidden)
     default_tab = tab_defs[0][1]
 
     app.layout = html.Div(
@@ -181,6 +152,55 @@ def create_app(
         style=PAGE_STYLE,
     )
 
+    _register_tab_callbacks(app, project, catalog, hidden)
+    _register_video_routes(app, project)
+    for tab in extra_tabs:
+        if tab.register is not None:
+            tab.register(app)
+    return app
+
+
+def _build_tab_defs(
+    project: SofaOptProject,
+    catalog,
+    extra_tabs: Sequence[DashboardTab],
+    hidden: set,
+) -> list[tuple]:
+    """Ordered ``(label, value, children)`` triples for the tab bar."""
+    tab_defs = []
+    if project.config_file is not None:
+        tab_defs.append(("Config", "config", build_config_tab()))
+    tab_defs += [
+        ("Scenes", "scenes", build_scenes_tab(catalog)),
+        ("Optimise", "optimise", build_optimise_tab(catalog)),
+        ("Performance", "performance", build_performance_tab()),
+        ("Progress", "progress", build_progress_tab()),
+        ("Parameter Bounds", "bounds", build_param_bounds_tab()),
+        ("Playground", "playground", build_playground_tab()),
+    ]
+    # Interaction analysis needs a scalar objective; skip in Pareto mode.
+    if not project.multi_objective:
+        tab_defs.append(("Importance / Interactions", "interactions", build_interactions_tab()))
+    if project.multi_objective:
+        tab_defs.append(("Pareto Front", "pareto", build_pareto_tab()))
+    tab_defs.append(("Archives", "archives", build_archives_tab()))
+
+    tab_defs = [t for t in tab_defs if t[1] not in hidden]
+
+    for tab in extra_tabs:
+        entry = (tab.label, tab.value, tab.build())
+        anchor = next(
+            (i for i, t in enumerate(tab_defs) if t[1] == tab.before), None
+        )
+        if anchor is None:
+            tab_defs.append(entry)
+        else:
+            tab_defs.insert(anchor, entry)
+    return tab_defs
+
+
+def _register_tab_callbacks(app, project: SofaOptProject, catalog, hidden: set) -> None:
+    """Register the built-in callbacks that match the visible tabs."""
     if project.config_file is not None and "config" not in hidden:
         register_config_callbacks(app)
     if "scenes" not in hidden:
@@ -197,11 +217,6 @@ def create_app(
         register_pareto_callbacks(app)
     if "archives" not in hidden:
         register_archives_callbacks(app)
-    _register_video_routes(app, project)
-    for tab in extra_tabs:
-        if tab.register is not None:
-            tab.register(app)
-    return app
 
 
 def _register_video_routes(app, project) -> None:

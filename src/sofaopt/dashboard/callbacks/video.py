@@ -179,7 +179,7 @@ def _summary_status_children(job: dict, summary_path: Path):
 # Callback registration
 # ---------------------------------------------------------------------------
 
-def register_video_callbacks(app) -> None:
+def register_video_callbacks(app) -> None:  # noqa: C901  # Dash registrar: total is the sum of its small nested callbacks; the flat registration list reads best in one place
     """Register all video-related dashboard callbacks."""
 
     # -- 1. Track which trial is selected ------------------------------------

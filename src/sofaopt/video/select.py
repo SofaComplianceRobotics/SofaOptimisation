@@ -171,16 +171,6 @@ def generate_summary_video(
     crf = video_kwargs.pop("crf", 28)
     preset = video_kwargs.pop("preset", "fast")
 
-    def _overlay_line1(rec: dict) -> str:
-        label = "best" if clips.index(rec) < top_n else "worst"
-        return (
-            f"{rec['gen_name']} / {rec['trial_name']}  [{label}]  "
-            f"score: {rec['final_score']:.1f}"
-        )
-
-    def _overlay_line2(rec: dict) -> str:
-        return format_param_line(rec.get("params") or {})
-
     # Fast path: all selected trials have cached in-run recordings.
     cached_clips = [
         project.trials_dir / r["gen_name"] / r["trial_name"] / "trial.mp4"
@@ -188,81 +178,22 @@ def generate_summary_video(
     ]
     if all(p.exists() for p in cached_clips):
         logger.info(f"[video] Using {len(cached_clips)} cached recordings -> {output_path}")
-        if text_overlay:
-            tmp_dir = Path(tempfile.mkdtemp(prefix="sofaopt_sumovl_"))
-            try:
-                overlaid: list[Path] = []
-                for i, (clip_path, rec) in enumerate(zip(cached_clips, clips, strict=True)):
-                    ovl = tmp_dir / f"clip_{i:02d}.mp4"
-                    try:
-                        apply_text_overlay(
-                            clip_path, ovl, _overlay_line1(rec), _overlay_line2(rec),
-                            crf=crf, preset=preset,
-                        )
-                        overlaid.append(ovl)
-                    except Exception as exc:
-                        logger.info(
-                            f"[video]   overlay failed for clip {i}: {exc} "
-                            "-- using raw clip"
-                        )
-                        overlaid.append(clip_path)
-                concat_videos(overlaid, output_path, crf=crf, preset=preset)
-            finally:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-        else:
-            concat_videos(cached_clips, output_path, crf=crf, preset=preset)
+        _concat_cached_clips(
+            cached_clips, clips, top_n, output_path,
+            text_overlay=text_overlay, crf=crf, preset=preset,
+        )
         logger.info(f"[video] Summary saved: {output_path}")
         return
 
     # Slow path: re-render each trial that has no cached recording.
     tmp_dir = Path(tempfile.mkdtemp(prefix="sofaopt_summary_"))
-    clip_paths: list[Path] = []
     try:
-        for i, rec in enumerate(clips, 1):
-            score = rec["final_score"]
-            label = "best" if i <= top_n else "worst"
-            trial_dir = project.trials_dir / rec["gen_name"] / rec["trial_name"]
-            cached = trial_dir / "trial.mp4"
-            logger.info(
-                f"[video] Clip {i}/{len(clips)} ({label}): "
-                f"{rec['gen_name']}/{rec['trial_name']} score={score:.1f}"
-            )
-            clip_out = tmp_dir / f"clip_{i:02d}_{label}.mp4"
-            if cached.exists():
-                logger.info("[video]   -> using cached recording")
-                if text_overlay:
-                    try:
-                        apply_text_overlay(
-                            cached, clip_out, _overlay_line1(rec), _overlay_line2(rec),
-                            crf=crf, preset=preset,
-                        )
-                    except Exception:
-                        shutil.copy2(cached, clip_out)
-                else:
-                    shutil.copy2(cached, clip_out)
-                clip_paths.append(clip_out)
-                continue
-            try:
-                generate_trial_video(
-                    project,
-                    trial_dir,
-                    clip_out,
-                    test_name=test_name,
-                    max_steps=clip_steps,
-                    crf=crf,
-                    preset=preset,
-                    text_overlay=text_overlay,
-                    _overlay_meta={
-                        "gen_name": rec["gen_name"],
-                        "trial_name": rec["trial_name"],
-                        "score": score,
-                    },
-                    **video_kwargs,
-                )
-                clip_paths.append(clip_out)
-            except Exception as exc:
-                logger.info(f"[video]   -> failed: {exc}")
-
+        clip_paths = _render_clips(
+            project, clips, top_n, tmp_dir,
+            test_name=test_name, clip_steps=clip_steps,
+            text_overlay=text_overlay, crf=crf, preset=preset,
+            video_kwargs=video_kwargs,
+        )
         if not clip_paths:
             raise RuntimeError("No clips were generated; cannot create summary.")
 
@@ -271,6 +202,102 @@ def generate_summary_video(
         logger.info(f"[video] Summary saved: {output_path}")
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _overlay_line1(rec: dict, clips: list[dict], top_n: int) -> str:
+    label = "best" if clips.index(rec) < top_n else "worst"
+    return (
+        f"{rec['gen_name']} / {rec['trial_name']}  [{label}]  "
+        f"score: {rec['final_score']:.1f}"
+    )
+
+
+def _overlay_line2(rec: dict) -> str:
+    return format_param_line(rec.get("params") or {})
+
+
+def _concat_cached_clips(
+    cached_clips: list[Path], clips: list[dict], top_n: int, output_path: Path,
+    *, text_overlay: bool, crf: int, preset: str,
+) -> None:
+    """Concatenate in-run recordings, burning in overlays when requested."""
+    if not text_overlay:
+        concat_videos(cached_clips, output_path, crf=crf, preset=preset)
+        return
+    tmp_dir = Path(tempfile.mkdtemp(prefix="sofaopt_sumovl_"))
+    try:
+        overlaid: list[Path] = []
+        for i, (clip_path, rec) in enumerate(zip(cached_clips, clips, strict=True)):
+            ovl = tmp_dir / f"clip_{i:02d}.mp4"
+            try:
+                apply_text_overlay(
+                    clip_path, ovl, _overlay_line1(rec, clips, top_n), _overlay_line2(rec),
+                    crf=crf, preset=preset,
+                )
+                overlaid.append(ovl)
+            except Exception as exc:
+                logger.info(
+                    f"[video]   overlay failed for clip {i}: {exc} "
+                    "-- using raw clip"
+                )
+                overlaid.append(clip_path)
+        concat_videos(overlaid, output_path, crf=crf, preset=preset)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _render_clips(
+    project, clips: list[dict], top_n: int, tmp_dir: Path,
+    *, test_name: str | None, clip_steps: int | None,
+    text_overlay: bool, crf: int, preset: str, video_kwargs: dict,
+) -> list[Path]:
+    """One overlaid clip per selected trial: cached recording or SOFA re-render."""
+    clip_paths: list[Path] = []
+    for i, rec in enumerate(clips, 1):
+        score = rec["final_score"]
+        label = "best" if i <= top_n else "worst"
+        trial_dir = project.trials_dir / rec["gen_name"] / rec["trial_name"]
+        cached = trial_dir / "trial.mp4"
+        logger.info(
+            f"[video] Clip {i}/{len(clips)} ({label}): "
+            f"{rec['gen_name']}/{rec['trial_name']} score={score:.1f}"
+        )
+        clip_out = tmp_dir / f"clip_{i:02d}_{label}.mp4"
+        if cached.exists():
+            logger.info("[video]   -> using cached recording")
+            if text_overlay:
+                try:
+                    apply_text_overlay(
+                        cached, clip_out, _overlay_line1(rec, clips, top_n), _overlay_line2(rec),
+                        crf=crf, preset=preset,
+                    )
+                except Exception:
+                    shutil.copy2(cached, clip_out)
+            else:
+                shutil.copy2(cached, clip_out)
+            clip_paths.append(clip_out)
+            continue
+        try:
+            generate_trial_video(
+                project,
+                trial_dir,
+                clip_out,
+                test_name=test_name,
+                max_steps=clip_steps,
+                crf=crf,
+                preset=preset,
+                text_overlay=text_overlay,
+                _overlay_meta={
+                    "gen_name": rec["gen_name"],
+                    "trial_name": rec["trial_name"],
+                    "score": score,
+                },
+                **video_kwargs,
+            )
+            clip_paths.append(clip_out)
+        except Exception as exc:
+            logger.info(f"[video]   -> failed: {exc}")
+    return clip_paths
 
 
 def cleanup_trial_recordings(
