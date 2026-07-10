@@ -192,6 +192,29 @@ A runnable example needing only a SOFA install with SofaPython3:
   the TPE and GP samplers, the Sobol' startup design, the Python runner with
   recording, multi-objective NSGA-II, and OAT sensitivity analysis.
 
+## Tests
+
+```bash
+pytest                           # unit suite — fast, no SOFA needed (the SOFA process is faked)
+ruff check src tests examples    # lint gate — clean is part of "done"
+```
+
+Two end-to-end tests ([`tests/test_e2e_cube_drop.py`](tests/test_e2e_cube_drop.py))
+additionally run one **deterministic real trial** of `examples/cube_drop` — once
+through a real `runSofa` (score written, child stops itself, run archives
+intact) and once through the in-process Python runner (same score, plus a
+recorded `trial.mp4`). They skip automatically unless a SOFA build is reachable
+(`SOFA_ROOT` / `RUNSOFA_EXE`) and the dev-only toolkit providing the `sofa`
+pytest marker is installed — a plain public checkout stays green.
+
+When to run what:
+
+| Trigger | Tier |
+|---|---|
+| any commit touching Python | `ruff check` clean + `pytest` (e2e auto-skips without SOFA) |
+| changes to the trial contract (runner, scoring, trial_state, archiving) | `pytest` on a machine with SOFA, so the e2e actually executes |
+| before a merge / PR / release | full suite with the e2e executing |
+
 ## Documentation
 
 - [`docs/porting-guide.md`](docs/porting-guide.md) — step-by-step: plug *your*
