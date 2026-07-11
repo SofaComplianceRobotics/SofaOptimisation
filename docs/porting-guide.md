@@ -168,6 +168,10 @@ PROJECT = SofaOptProject(
 - `max_score` normalizes the test to `[0,1]`; `weight` combines tests.
 - `gated=True`: only run this test once an *ungated* test has
   scored above zero for the candidate.
+- `run_count_min=m`: adaptive re-evaluation (racing) — start each trial with
+  only `m` repeats and add the rest one at a time, only while the candidate
+  might still beat the study's best score (mean-aggregation only; see the
+  [optimization guide §5](optimization-guide.md#5-noise-repeats-duplicates-and-stopping-early)).
 
 ### How scores combine (exact order)
 

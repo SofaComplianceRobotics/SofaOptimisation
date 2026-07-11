@@ -9,6 +9,7 @@ from pathlib import Path
 import optuna
 
 from sofaopt.core.algorithm import tell_safely
+from sofaopt.core.generation.racing import deferred_by_racing
 from sofaopt.core.generation.types import LaunchedTrial, LaunchResult, RunHistory
 from sofaopt.core.runconfig import RunConfig
 from sofaopt.core.sofa_runner import (
@@ -124,10 +125,32 @@ def _relaunch_run(
         entry.runs.append(new_run)
 
 
+def defer_race_run(
+    entry: LaunchedTrial,
+    run_slot: int,
+    test_name: str,
+    test_run_index: int,
+    test_run_total: int,
+) -> None:
+    """Queue one raced repeat: it launches only if the CI check asks for it."""
+    entry.pending_race_runs.append(
+        (run_slot, test_name, test_run_index, test_run_total)
+    )
+    update_trial_run(
+        entry.trial_state_path,
+        run_slot,
+        {
+            "state": "pending",
+            "score": None,
+            "reason": "racing_awaiting_confidence_check",
+        },
+    )
+
+
 def _launch_trial_runs(
     cfg: RunConfig, entry: LaunchedTrial, *, launched: list[LaunchedTrial], gen_index: int
 ) -> None:
-    """Launch every ungated run of a trial; queue gated ones as pending."""
+    """Launch every ungated run of a trial; queue gated and raced ones as pending."""
     gated = set() if cfg.project.multi_objective else set(cfg.gated_test_names)
     for r, (test_name, test_run_index, test_run_total) in enumerate(cfg.run_plan):
         run_slot = r + 1
@@ -144,6 +167,9 @@ def _launch_trial_runs(
                     "reason": "gated_test_waiting_for_ungated_success",
                 },
             )
+            continue
+        if deferred_by_racing(cfg, test_name, test_run_index):
+            defer_race_run(entry, run_slot, test_name, test_run_index, test_run_total)
             continue
         entry.runs.append(
             _launch_one_run(
@@ -266,6 +292,112 @@ def _record_cached_trial(
     state.record_score(value)
 
 
+def _prepare_and_launch(
+    cfg: RunConfig,
+    *,
+    trial,
+    trial_index: int,
+    trial_dir: Path,
+    trial_state_path: Path,
+    params: dict,
+    env: dict,
+    gen_index: int,
+    result: LaunchResult,
+) -> None:
+    """Prepare one trial's assets and start its runs; raising hard-fails it."""
+    _mark_all_runs(trial_state_path, len(cfg.run_plan), "preparing")
+    prep = prepare_trial(cfg.project, params, trial_dir)
+    result.assets_by_trial[trial_index] = list(prep.cleanup)
+    if prep.preview_image is not None:
+        # Previews render at generation end: offscreen GL contends with
+        # SOFA's GL init on Windows and can hang scene startup.
+        result.preview_tasks.append((Path(prep.preview_image), trial_index))
+
+    entry = LaunchedTrial(
+        trial_index=trial_index,
+        trial=trial,
+        trial_state_path=trial_state_path,
+        params_path=trial_dir / "params.json",
+        trial_env={**env, **prep.env},
+    )
+    # Register the entry *before* launching so this trial's own earlier
+    # runs count toward the throttle, and so a mid-trial launch failure
+    # can't leave already-started processes untracked.
+    result.trials.append(entry)
+    try:
+        _launch_trial_runs(cfg, entry, launched=result.trials, gen_index=gen_index)
+    except Exception:
+        # The trial is about to be hard-failed: untrack it and kill any
+        # runs that did start, so nothing keeps running unsupervised.
+        result.trials.remove(entry)
+        for proc, _, _ in entry.runs:
+            kill_process_tree(proc)
+        raise
+
+
+def _launch_or_cache_trial(
+    cfg: RunConfig,
+    *,
+    gen_index: int,
+    trial,
+    trial_index: int,
+    gen_dir: Path,
+    study: optuna.Study,
+    env: dict,
+    state: RunHistory,
+    result: LaunchResult,
+    dedup_index: dict | None,
+) -> None:
+    """One trial of the generation: reuse a cached duplicate, or prepare and
+    launch it (per-trial isolation: a prepare/launch error hard-fails only
+    this trial)."""
+    trial_dir = gen_dir / f"trial_{trial_index:02d}"
+    trial_dir.mkdir(exist_ok=True)
+    trial_state_path = trial_dir / "trial_state.json"
+
+    if active_sofa_process_count(result.trials) >= cfg.project.max_active_sofa_procs:
+        _mark_all_runs(trial_state_path, len(cfg.run_plan), "waiting-slot")
+
+    params = params_from_trial(trial, cfg.project)
+
+    hit = dedup_index.get(tuple(sorted(trial.params.items()))) if dedup_index else None
+    if hit is not None:
+        _record_cached_trial(
+            cfg, study=study, trial=trial,
+            trial_state_path=trial_state_path, params=params,
+            gen_index=gen_index, trial_index=trial_index,
+            value=hit[0], source_number=hit[1],
+            result=result, state=state,
+        )
+        return
+
+    try:
+        _prepare_and_launch(
+            cfg,
+            trial=trial,
+            trial_index=trial_index,
+            trial_dir=trial_dir,
+            trial_state_path=trial_state_path,
+            params=params,
+            env=env,
+            gen_index=gen_index,
+            result=result,
+        )
+    except Exception as e:
+        _record_prepare_failure(
+            cfg,
+            study=study,
+            trial=trial,
+            trial_state_path=trial_state_path,
+            trial_dir=trial_dir,
+            gen_index=gen_index,
+            trial_index=trial_index,
+            error=e,
+            result=result,
+            state=state,
+        )
+
+
 def launch_generation_trials(
     cfg: RunConfig,
     *,
@@ -275,7 +407,6 @@ def launch_generation_trials(
     env: dict,
     state: RunHistory,
     gen_dir: Path,
-    trial_state_paths_by_trial: list[Path],
 ) -> LaunchResult:
     """Prepare and launch every trial of one generation."""
     project = cfg.project
@@ -288,70 +419,17 @@ def launch_generation_trials(
     )
 
     for i, trial in enumerate(trials):
-        trial_index = i + 1
-        trial_dir = gen_dir / f"trial_{trial_index:02d}"
-        trial_dir.mkdir(exist_ok=True)
-        trial_state_path = trial_dir / "trial_state.json"
-
-        if active_sofa_process_count(result.trials) >= project.max_active_sofa_procs:
-            _mark_all_runs(trial_state_path, len(cfg.run_plan), "waiting-slot")
-
-        params = params_from_trial(trial, project)
-
-        if dedup_index is not None:
-            hit = dedup_index.get(tuple(sorted(trial.params.items())))
-            if hit is not None:
-                _record_cached_trial(
-                    cfg, study=study, trial=trial,
-                    trial_state_path=trial_state_path, params=params,
-                    gen_index=gen_index, trial_index=trial_index,
-                    value=hit[0], source_number=hit[1],
-                    result=result, state=state,
-                )
-                continue
-
-        try:
-            _mark_all_runs(trial_state_path, len(cfg.run_plan), "preparing")
-            prep = prepare_trial(project, params, trial_dir)
-            result.assets_by_trial[trial_index] = list(prep.cleanup)
-            if prep.preview_image is not None:
-                # Previews render at generation end: offscreen GL contends with
-                # SOFA's GL init on Windows and can hang scene startup.
-                result.preview_tasks.append((Path(prep.preview_image), trial_index))
-
-            entry = LaunchedTrial(
-                trial_index=trial_index,
-                trial=trial,
-                trial_state_path=trial_state_path,
-                params_path=trial_dir / "params.json",
-                trial_env={**env, **prep.env},
-            )
-            # Register the entry *before* launching so this trial's own earlier
-            # runs count toward the throttle, and so a mid-trial launch failure
-            # can't leave already-started processes untracked.
-            result.trials.append(entry)
-            try:
-                _launch_trial_runs(cfg, entry, launched=result.trials, gen_index=gen_index)
-            except Exception:
-                # The trial is about to be hard-failed: untrack it and kill any
-                # runs that did start, so nothing keeps running unsupervised.
-                result.trials.remove(entry)
-                for proc, _, _ in entry.runs:
-                    kill_process_tree(proc)
-                raise
-
-        except Exception as e:
-            _record_prepare_failure(
-                cfg,
-                study=study,
-                trial=trial,
-                trial_state_path=trial_state_path,
-                trial_dir=trial_dir,
-                gen_index=gen_index,
-                trial_index=trial_index,
-                error=e,
-                result=result,
-                state=state,
-            )
+        _launch_or_cache_trial(
+            cfg,
+            gen_index=gen_index,
+            trial=trial,
+            trial_index=i + 1,
+            gen_dir=gen_dir,
+            study=study,
+            env=env,
+            state=state,
+            result=result,
+            dedup_index=dedup_index,
+        )
 
     return result

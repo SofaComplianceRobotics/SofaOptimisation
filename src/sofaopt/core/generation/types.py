@@ -28,7 +28,9 @@ class LaunchedTrial:
     ``runs`` holds ``(Popen, trial_state_path, run_slot)`` tuples for every
     SOFA process started for this trial (relaunches replace their slot's
     entry in place). ``pending_gated_runs`` holds ``(run_slot, test_name,
-    test_run_index, test_run_total)`` for gated tests not yet launched.
+    test_run_index, test_run_total)`` for gated tests not yet launched;
+    ``pending_race_runs`` holds the same shape for raced repeats waiting on
+    a confidence check (see ``generation/racing.py``).
     """
 
     trial_index: int
@@ -38,6 +40,7 @@ class LaunchedTrial:
     trial_env: dict[str, str]
     runs: list[tuple] = field(default_factory=list)
     pending_gated_runs: list[tuple[int, str, int, int]] = field(default_factory=list)
+    pending_race_runs: list[tuple[int, str, int, int]] = field(default_factory=list)
     launch_times_by_slot: dict[int, float] = field(default_factory=dict)
 
 

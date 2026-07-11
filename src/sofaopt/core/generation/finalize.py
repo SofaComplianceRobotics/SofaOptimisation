@@ -14,9 +14,10 @@ from pathlib import Path
 
 import optuna
 
-from sofaopt.core.algorithm import _finalize_trial_score
-from sofaopt.core.generation.launch import _relaunch_run
+from sofaopt.core.algorithm import _finalize_trial_score, _read_run_results
+from sofaopt.core.generation.launch import _relaunch_run, defer_race_run
 from sofaopt.core.generation.plan import prune_trial, trial_has_ungated_positive_run
+from sofaopt.core.generation.racing import deferred_by_racing, evaluate_race
 from sofaopt.core.generation.types import LaunchedTrial, LaunchResult, RunHistory
 from sofaopt.core.runconfig import RunConfig
 from sofaopt.core.scoring import write_gen_summary
@@ -37,7 +38,6 @@ def finalize_generation(
     gen_index: int,
     study: optuna.Study,
     state: RunHistory,
-    env: dict,
     gen_dir: Path,
     trial_state_paths_by_trial: list[Path],
     launch_result: LaunchResult,
@@ -75,19 +75,12 @@ class _GenerationFinalizer:
     relaunch_counts: dict[tuple[int, int], int] = field(default_factory=dict)
 
     def run(self) -> None:
-        project = self.cfg.project
         self.gen_scores = list(self.launch.prelaunch_scores)
         start_time = time.time()
         last_print = 0.0
 
         while len(self.finalized) < len(self.launch.trials):
-            for entry in self.launch.trials:
-                if entry.trial_index in self.finalized:
-                    continue
-                if self._scan_runs(entry):
-                    continue  # still has an active (or just relaunched) run
-                self._settle_trial(entry)
-
+            self._settle_pass()
             now = time.time()
             if now - last_print >= 0.5:
                 self._print_progress(start_time)
@@ -97,16 +90,27 @@ class _GenerationFinalizer:
 
         self._print_progress(start_time, final=True)
         self._render_previews()
-
-        if project.on_generation_end is not None:
-            try:
-                project.on_generation_end(
-                    self.gen_index, list(self.trial_state_paths_by_trial)
-                )
-            except Exception as e:
-                logger.warning(f"[warn] on_generation_end hook failed: {e}")
-
+        self._run_generation_end_hook()
         write_gen_summary(self.gen_dir, self.gen_index, self.gen_scores)
+
+    def _settle_pass(self) -> None:
+        """One non-blocking sweep over the not-yet-finalized trials."""
+        for entry in self.launch.trials:
+            if entry.trial_index in self.finalized:
+                continue
+            if self._scan_runs(entry):
+                continue  # still has an active (or just relaunched) run
+            self._settle_trial(entry)
+
+    def _run_generation_end_hook(self) -> None:
+        if self.cfg.project.on_generation_end is None:
+            return
+        try:
+            self.cfg.project.on_generation_end(
+                self.gen_index, list(self.trial_state_paths_by_trial)
+            )
+        except Exception as e:
+            logger.warning(f"[warn] on_generation_end hook failed: {e}")
 
     # -- phases ---------------------------------------------------------------
 
@@ -207,14 +211,22 @@ class _GenerationFinalizer:
                 )
             entry.pending_gated_runs.clear()
 
+        if entry.pending_race_runs and self._race_next_repeat(entry):
+            return  # a raced repeat launched (or waits for capacity)
+
         self._finalize_trial(entry)
 
     def _launch_gated_runs(self, entry: LaunchedTrial) -> None:
+        """Launch the gate-opened runs — raced repeats still race, so a gated
+        raced test starts at its ``run_count_min`` like an ungated one."""
         logger.info(
             f"[gate] Gen {self.gen_index:04d} Trial {entry.trial_index:02d} "
             f"ungated success; launching gated tests."
         )
         for run_slot, t_name, t_idx, t_total in list(entry.pending_gated_runs):
+            if deferred_by_racing(self.cfg, t_name, t_idx):
+                defer_race_run(entry, run_slot, t_name, t_idx, t_total)
+                continue
             _relaunch_run(
                 self.cfg, entry,
                 launched=self.launch.trials,
@@ -223,6 +235,47 @@ class _GenerationFinalizer:
                 test_run_index=t_idx, test_run_total=t_total,
             )
         entry.pending_gated_runs.clear()
+
+    def _race_next_repeat(self, entry: LaunchedTrial) -> bool:
+        """Racing: add repeats only while the CI overlaps the incumbent.
+
+        Returns True while the trial must not settle yet (a repeat just
+        launched, or is deferred until capacity frees up). A stop verdict
+        skips the remaining slots and lets the trial settle this pass.
+        """
+        run_results = _read_run_results(entry.trial_state_path, entry.runs)
+        pending_names = {name for _, name, _, _ in entry.pending_race_runs}
+        verdict = evaluate_race(self.cfg, self.study, run_results, pending_names)
+
+        if not verdict.keep_running:
+            for run_slot, *_ in list(entry.pending_race_runs):
+                update_trial_run(
+                    entry.trial_state_path, run_slot,
+                    {"state": "skipped", "score": None,
+                     "reason": f"racing_skipped: {verdict.reason}"},
+                )
+            entry.pending_race_runs.clear()
+            logger.info(
+                f"[race] Gen {self.gen_index:04d} Trial {entry.trial_index:02d}: "
+                f"stop after {len(entry.runs)} run(s) — {verdict.reason}"
+            )
+            return False
+
+        if self._at_capacity():
+            return True  # decide again on a later pass, once a slot frees up
+        run_slot, t_name, t_idx, t_total = entry.pending_race_runs.pop(0)
+        logger.info(
+            f"[race] Gen {self.gen_index:04d} Trial {entry.trial_index:02d}: "
+            f"repeat {t_name} {t_idx}/{t_total} — {verdict.reason}"
+        )
+        _relaunch_run(
+            self.cfg, entry,
+            launched=self.launch.trials,
+            gen_index=self.gen_index,
+            run_slot=run_slot, test_name=t_name,
+            test_run_index=t_idx, test_run_total=t_total,
+        )
+        return True
 
     def _finalize_trial(self, entry: LaunchedTrial) -> None:
         self.finalized.add(entry.trial_index)

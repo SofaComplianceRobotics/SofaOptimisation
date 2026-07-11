@@ -120,6 +120,16 @@ class TestSpec:
             test's score: ``"mean"`` (default), ``"median"``, ``"sum"``, or
             ``"exponential_coverage"`` (sum × 1.5 per additional positive
             repeat — rewards covering many scenarios).
+        run_count_min: Adaptive re-evaluation (racing). ``None`` (default)
+            runs the fixed ``run_count`` repeats. Set to ``1 <= m <=
+            run_count`` to launch only ``m`` repeats per trial and add the
+            rest one at a time — only while the trial's 95% confidence
+            interval still overlaps the study's best score. Candidates that
+            provably cannot beat the incumbent skip their remaining repeats;
+            contenders get the full ``run_count``. Requires
+            ``score_aggregation="mean"`` (repeats must be noise samples of
+            one scenario, not different scenarios). Ignored for
+            multi-objective runs (no scalar incumbent to race against).
         default_selected: Whether the dashboard pre-selects this test.
     """
 
@@ -134,12 +144,27 @@ class TestSpec:
     gated: bool = False
     relaunchable: bool = False
     score_aggregation: str = "mean"
+    run_count_min: int | None = None
     default_selected: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "scene_file", Path(self.scene_file).resolve())
         if not self.label:
             object.__setattr__(self, "label", self.name)
+        if self.run_count_min is not None:
+            if self.score_aggregation != "mean":
+                raise ValueError(
+                    f"Test '{self.name}': run_count_min (racing) requires "
+                    f"score_aggregation='mean' — with "
+                    f"'{self.score_aggregation}' the repeats are distinct "
+                    "scenarios, and skipping some would change what the "
+                    "score measures."
+                )
+            if not 1 <= self.run_count_min <= self.run_count:
+                raise ValueError(
+                    f"Test '{self.name}': run_count_min must be in "
+                    f"[1, run_count={self.run_count}], got {self.run_count_min}."
+                )
 
     @property
     def display_label(self) -> str:
@@ -260,7 +285,21 @@ class SofaOptProject:
     """Stop the run early after this many consecutive generations without any
     improvement of the best score (0 = run all ``n_generations``). Post-run
     steps (summary video, report) still execute. Ignored for multi-objective
-    studies."""
+    studies. With ``cmaes_restarts > 0`` a stall triggers an IPOP restart
+    instead of stopping, until the restart budget is spent."""
+    cmaes_restarts: int = 0
+    """Maximum number of IPOP-style CMA-ES restarts (Auger & Hansen 2005).
+    0 (default) keeps the historical behavior: a stall *stops* the run. With
+    N > 0 the first N stalls each restart CMA-ES instead — a fresh optimizer
+    with population size multiplied by ``cmaes_inc_popsize``, the initial
+    ``cmaes_sigma0`` and a uniform-random start point — the standard answer
+    to multimodal landscapes. Needs ``stall_generations > 0`` (the trigger);
+    only acts when ``sampler="cmaes"`` and single-objective. The run still
+    ends at ``n_generations`` regardless of restarts."""
+    cmaes_inc_popsize: int = 2
+    """Population-size multiplier applied at each IPOP restart (default 2).
+    The internal CMA population grows past ``n_parallel``, so one CMA update
+    then spans several sofaopt generations — that is expected and fine."""
     hard_fail_score: float = -3.0
     max_active_sofa_procs: int = 12
     max_run_relaunches: int = 0
@@ -323,6 +362,15 @@ class SofaOptProject:
             raise ValueError("project.params is empty — nothing to optimize.")
         if not self.tests:
             raise ValueError("project.tests is empty — nothing to evaluate.")
+        if self.cmaes_restarts < 0:
+            raise ValueError("cmaes_restarts must be >= 0.")
+        if self.cmaes_inc_popsize < 1:
+            raise ValueError("cmaes_inc_popsize must be >= 1.")
+        if self.cmaes_restarts > 0 and self.stall_generations <= 0:
+            raise ValueError(
+                "cmaes_restarts > 0 needs stall_generations > 0 — the stall "
+                "tracker is what triggers a restart."
+            )
         if self.multi_objective and len(self.tests) < 2:
             raise ValueError("multi_objective=True requires at least 2 tests.")
         if self.multi_objective and any(t.gated for t in self.tests):
