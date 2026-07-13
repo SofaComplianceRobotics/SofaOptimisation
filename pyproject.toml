@@ -57,7 +57,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"] # pytest asserts
+# S101 pytest asserts; S311 non-crypto random (simulation noise, seeds, fixtures).
+"tests/**" = ["S101", "S311"]
+# Example scenes/functions: S311 non-crypto random (per-run score noise, seeding).
+"examples/**" = ["S311"]
 # In-run frame recorder: per-step best-effort GL/ffmpeg probing. Recording must
 # never fail a trial, and logging every animation step would spam the run log.
 "src/sofaopt/scene/frame_recorder.py" = ["S110", "SIM105"]
