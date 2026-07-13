@@ -294,12 +294,31 @@ class SofaOptProject:
     with population size multiplied by ``cmaes_inc_popsize``, the initial
     ``cmaes_sigma0`` and a uniform-random start point — the standard answer
     to multimodal landscapes. Needs ``stall_generations > 0`` (the trigger);
-    only acts when ``sampler="cmaes"`` and single-objective. The run still
-    ends at ``n_generations`` regardless of restarts."""
+    only acts when ``sampler="cmaes"`` and single-objective. Always the hard
+    cap on total restarts; with ``run_until_converged`` set it also bounds the
+    self-sizing run, and the fixed-budget default still ends at
+    ``n_generations``."""
     cmaes_inc_popsize: int = 2
     """Population-size multiplier applied at each IPOP restart (default 2).
     The internal CMA population grows past ``n_parallel``, so one CMA update
     then spans several sofaopt generations — that is expected and fine."""
+    run_until_converged: bool = False
+    """Self-size the run: ``n_generations`` becomes a safety ceiling, not a
+    target. The run keeps restarting on each stall and stops once
+    ``restart_patience`` consecutive restarts fail to improve the best score —
+    no need to guess how many generations convergence will take. Requires
+    ``cmaes_restarts > 0`` (the hard cap), ``stall_generations > 0``,
+    ``restart_patience >= 1``, ``sampler="cmaes"`` and single-objective. Set
+    ``n_generations`` and ``cmaes_restarts`` generously; the run ends on the
+    fruitless-restart streak, the ceiling, or the restart cap, whichever
+    comes first."""
+    restart_patience: int = 2
+    """Consecutive restarts without a global-best improvement tolerated before
+    the run stops (only consulted when ``run_until_converged=True``). 2 = give
+    up after two fruitless basins in a row; a restart that improves the
+    incumbent resets the streak. Parallels ``stall_generations`` (patience in
+    generations before a restart) one level up: patience in restarts before
+    giving up."""
     hard_fail_score: float = -3.0
     max_active_sofa_procs: int = 12
     max_run_relaunches: int = 0
@@ -356,12 +375,23 @@ class SofaOptProject:
         object.__setattr__(self, "work_dir", Path(self.work_dir).resolve())
         if self.runsofa_exe is not None:
             object.__setattr__(self, "runsofa_exe", Path(self.runsofa_exe))
+        # Validation is split per concern so each optimizer feature owns its own
+        # rules — new features (e.g. multi-fidelity pruning) add a validator +
+        # one call here rather than editing a shared block.
+        self._validate_search_space()
+        self._validate_restart_config()
+        self._validate_multi_objective()
+
+    def _validate_search_space(self) -> None:
         if self.sampler == "cmaes" and not self.multi_objective and self.n_parallel < 4:
             raise ValueError("n_parallel must be >= 4 for CMA-ES to remain valid.")
         if not self.params:
             raise ValueError("project.params is empty — nothing to optimize.")
         if not self.tests:
             raise ValueError("project.tests is empty — nothing to evaluate.")
+
+    def _validate_restart_config(self) -> None:
+        """IPOP restart + convergence-driven termination rules."""
         if self.cmaes_restarts < 0:
             raise ValueError("cmaes_restarts must be >= 0.")
         if self.cmaes_inc_popsize < 1:
@@ -371,6 +401,21 @@ class SofaOptProject:
                 "cmaes_restarts > 0 needs stall_generations > 0 — the stall "
                 "tracker is what triggers a restart."
             )
+        if self.run_until_converged and (
+            self.cmaes_restarts <= 0
+            or self.stall_generations <= 0
+            or self.restart_patience < 1
+            or self.sampler != "cmaes"
+            or self.multi_objective
+        ):
+            raise ValueError(
+                "run_until_converged=True needs cmaes_restarts > 0, "
+                "stall_generations > 0, restart_patience >= 1, sampler='cmaes' "
+                "and single-objective — it makes the restart-budget stall signal "
+                "the sole termination condition."
+            )
+
+    def _validate_multi_objective(self) -> None:
         if self.multi_objective and len(self.tests) < 2:
             raise ValueError("multi_objective=True requires at least 2 tests.")
         if self.multi_objective and any(t.gated for t in self.tests):

@@ -39,3 +39,5 @@ CMAES_MARGIN = "OPT_CMAES_MARGIN"          # "1"/"true" to enable CMA-ES-with-Ma
 SEED_SAMPLER = "OPT_SEED_SAMPLER"          # "random" | "sobol" (initial-design)
 N_PARALLEL = "OPT_N_PARALLEL"              # int override for project.n_parallel
 N_GENERATIONS = "OPT_N_GENERATIONS"        # int override for project.n_generations
+RUN_UNTIL_CONVERGED = "OPT_RUN_UNTIL_CONVERGED"  # "1"/"true" for self-sizing restart-driven stop
+RESTART_PATIENCE = "OPT_RESTART_PATIENCE"  # int override for project.restart_patience

@@ -90,7 +90,14 @@ def _apply_env_overrides(project: SofaOptProject) -> SofaOptProject:
     margin = os.environ.get(envkeys.CMAES_MARGIN)
     if margin is not None:
         overrides["cmaes_with_margin"] = margin.strip().lower() in ("1", "true", "yes", "on")
-    for key, field in ((envkeys.N_PARALLEL, "n_parallel"), (envkeys.N_GENERATIONS, "n_generations")):
+    converged = os.environ.get(envkeys.RUN_UNTIL_CONVERGED)
+    if converged is not None:
+        overrides["run_until_converged"] = converged.strip().lower() in ("1", "true", "yes", "on")
+    for key, field in (
+        (envkeys.N_PARALLEL, "n_parallel"),
+        (envkeys.N_GENERATIONS, "n_generations"),
+        (envkeys.RESTART_PATIENCE, "restart_patience"),
+    ):
         raw = os.environ.get(key)
         if raw:
             try:
@@ -282,6 +289,42 @@ class _StallTracker:
         self.count = 0
 
 
+def _best_value(study) -> float | None:
+    """The study's best completed value, or None before any trial completes."""
+    try:
+        return float(study.best_value)
+    except ValueError:
+        return None
+
+
+class _RestartProductivity:
+    """Tracks whether restarts keep paying off (``run_until_converged``).
+
+    A *basin* (the initial run, or each restart's exploration) is productive
+    if the run-global best improved during it. Once ``patience`` consecutive
+    restarts fail to improve, the search has converged — more restarts are not
+    finding new basins worth the budget. The run-global best is never reset, so
+    each basin must beat everything seen before it to count as productive.
+    """
+
+    def __init__(self, patience: int) -> None:
+        self.patience = patience
+        self.best_before_basin: float = float("-inf")
+        self.streak = 0
+
+    def basin_ended(self, current_best: float | None) -> bool:
+        """Call when a stall fires. Updates the streak; returns True when the
+        run has converged (``patience`` consecutive fruitless restarts)."""
+        improved = current_best is not None and current_best > self.best_before_basin + 1e-9
+        self.streak = 0 if improved else self.streak + 1
+        return self.streak >= self.patience
+
+    def restarted(self, current_best: float | None) -> None:
+        """Call after a restart fires: the new basin is measured from here."""
+        if current_best is not None:
+            self.best_before_basin = current_best
+
+
 def _compute_restart_state(study, project, stall: "_StallTracker", fruitless_streak: int) -> dict:
     """Per-generation IPOP snapshot for progress.json (dashboard restart panel).
 
@@ -297,9 +340,41 @@ def _compute_restart_state(study, project, stall: "_StallTracker", fruitless_str
         "stall_limit": stall.limit,
         "current_popsize": restart_popsize(project, index) if index > 0 else project.n_parallel,
         "fruitless_streak": fruitless_streak,
-        "restart_patience": getattr(project, "restart_patience", 0),
-        "run_until_converged": getattr(project, "run_until_converged", False),
+        "restart_patience": project.restart_patience,
+        "run_until_converged": project.run_until_converged,
     }
+
+
+def _handle_stall(
+    study, project, stall: "_StallTracker", productivity: "_RestartProductivity",
+    *, gen: int, history, total_gens: int,
+) -> bool:
+    """Decide what a stall means: converge-stop, IPOP restart, or plain stop.
+
+    Returns True when the run should end (break the generation loop), False
+    when a restart fired and the loop should continue with the grown
+    population.
+    """
+    converged = productivity.basin_ended(_best_value(study))
+    if project.run_until_converged and converged:
+        logger.info(
+            f"[converged] Search converged — {productivity.streak} restart(s) "
+            f"without improvement at generation {gen}. Stopping."
+        )
+        return True
+    event = maybe_restart(
+        study, project, _seed_sampler(project),
+        gen=gen, trial_chron=len(history.all_scores),
+    )
+    if event:
+        productivity.restarted(_best_value(study))
+        stall.reset()
+        return False
+    logger.info(
+        f"[stall] Best score unchanged for {stall.count} generations "
+        f"— stopping early at generation {gen}/{total_gens}."
+    )
+    return True
 
 
 def _run(project: SofaOptProject, cfg: RunConfig) -> None:
@@ -327,9 +402,9 @@ def _run(project: SofaOptProject, cfg: RunConfig) -> None:
 
     total_gens = gen_offset + project.n_generations
     stall = _StallTracker(0 if project.multi_objective else project.stall_generations)
-    fruitless_streak = 0  # consecutive restarts without a global-best gain (Feature C)
+    productivity = _RestartProductivity(project.restart_patience)
     for gen in range(gen_offset + 1, total_gens + 1):
-        restart_state = _compute_restart_state(study, project, stall, fruitless_streak)
+        restart_state = _compute_restart_state(study, project, stall, productivity.streak)
         write_progress(
             cfg, gen, 0, history.all_scores, started_at,
             total_gens=total_gens, restart_state=restart_state,
@@ -348,18 +423,10 @@ def _run(project: SofaOptProject, cfg: RunConfig) -> None:
         _print_best_so_far(study, project)
         prune_count = _maybe_prune_recordings(project, gen, prune_count)
 
-        if stall.should_stop(study):
-            event = maybe_restart(
-                study, project, _seed_sampler(project),
-                gen=gen, trial_chron=len(history.all_scores),
-            )
-            if event:
-                stall.reset()
-                continue
-            logger.info(
-                f"[stall] Best score unchanged for {stall.count} generations "
-                f"— stopping early at generation {gen}/{total_gens}."
-            )
+        if stall.should_stop(study) and _handle_stall(
+            study, project, stall, productivity, gen=gen, history=history,
+            total_gens=total_gens,
+        ):
             break
 
     logger.info("\nOptimization complete.")

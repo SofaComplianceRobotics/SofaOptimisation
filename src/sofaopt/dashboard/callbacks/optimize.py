@@ -29,8 +29,17 @@ def _selected_tests(check_vals, check_ids, store) -> tuple[list[str], dict[str, 
     return test_names, test_weights
 
 
-def _selection_error(test_names, gated_names, test_weights, sampler, n_parallel) -> str | None:
-    """Validation message for the Run request, or None when it can start."""
+def _selection_error(
+    test_names, gated_names, test_weights, sampler, n_parallel,
+    run_until_converged=None, restart_patience=None,
+) -> str | None:
+    """Validation message for the Run request, or None when it can start.
+
+    The authoritative gate is ``SofaOptProject.__post_init__`` in the launched
+    subprocess; this only pre-flights the UI-knowable conditions so a
+    misconfigured "Run until converged" surfaces a friendly message instead of
+    a subprocess traceback in the log.
+    """
     if not test_names:
         return "No tests selected."
     if len(gated_names) == len(test_names):
@@ -40,12 +49,31 @@ def _selection_error(test_names, gated_names, test_weights, sampler, n_parallel)
         return f"Weights must sum to 100% (currently {total}%)."
     if sampler == "cmaes" and int(n_parallel or 0) < 4:
         return "CMA-ES needs Parallel >= 4. Lower it only with a different sampler."
+    return _converged_error(sampler, run_until_converged, restart_patience)
+
+
+def _converged_error(sampler, run_until_converged, restart_patience) -> str | None:
+    """Pre-flight the 'Run until converged' toggle against project settings."""
+    if not (run_until_converged and "converged" in run_until_converged):
+        return None
+    if sampler != "cmaes":
+        return "'Run until converged' needs the CMA-ES sampler."
+    if int(restart_patience or 0) < 1:
+        return "'Run until converged' needs restart patience >= 1."
+    from sofaopt.dashboard import context
+    project = context.project()
+    if project.cmaes_restarts <= 0 or project.stall_generations <= 0:
+        return (
+            "'Run until converged' needs the project to set cmaes_restarts > 0 "
+            "and stall_generations > 0 (the restart trigger and budget)."
+        )
     return None
 
 
 def _optimizer_env(
     test_names, test_weights, gated_names,
     sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
+    run_until_converged=None, restart_patience=None,
 ) -> dict:
     """Environment for the optimizer subprocess: selection + setting overrides."""
     env = os.environ.copy()
@@ -60,10 +88,15 @@ def _optimizer_env(
     if seed_sampler:
         env[envkeys.SEED_SAMPLER] = str(seed_sampler)
     env[envkeys.CMAES_MARGIN] = "1" if (cmaes_margin and "margin" in cmaes_margin) else "0"
+    env[envkeys.RUN_UNTIL_CONVERGED] = (
+        "1" if (run_until_converged and "converged" in run_until_converged) else "0"
+    )
     if n_parallel:
         env[envkeys.N_PARALLEL] = str(int(n_parallel))
     if n_generations:
         env[envkeys.N_GENERATIONS] = str(int(n_generations))
+    if restart_patience:
+        env[envkeys.RESTART_PATIENCE] = str(int(restart_patience))
     return env
 
 
@@ -230,11 +263,14 @@ def register_optimise_callbacks(app) -> None:
         State("opt-cmaes-margin", "value"),
         State("opt-n-parallel", "value"),
         State("opt-n-generations", "value"),
+        State("opt-run-until-converged", "value"),
+        State("opt-restart-patience", "value"),
         prevent_initial_call=True,
     )
     def handle_optimise(
         _, __, check_vals, check_ids, gate_vals, gate_ids, store,
         sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
+        run_until_converged, restart_patience,
     ):
         if ctx.triggered_id == "opt-stop-btn":
             return stop_optimize()
@@ -247,12 +283,16 @@ def register_optimise_callbacks(app) -> None:
             if checks and cid["test"] in test_names
         ]
 
-        error = _selection_error(test_names, gated_names, test_weights, sampler, n_parallel)
+        error = _selection_error(
+            test_names, gated_names, test_weights, sampler, n_parallel,
+            run_until_converged, restart_patience,
+        )
         if error:
             return error
         return start_optimize(_optimizer_env(
             test_names, test_weights, gated_names,
             sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
+            run_until_converged, restart_patience,
         ))
 
     @app.callback(
