@@ -2,12 +2,18 @@
 
 from .builders import _build_progress_card, _build_weight_segment_bar
 from .helpers import _find_earliest_not_done, _get_trial_actual_state
-from .panels import _build_progress_grid, _build_progress_stats, _build_trial_detail
+from .panels import (
+    _build_progress_grid,
+    _build_progress_stats,
+    _build_restart_status,
+    _build_trial_detail,
+)
 
 __all__ = [
     "_build_progress_card",
     "_build_progress_grid",
     "_build_progress_stats",
+    "_build_restart_status",
     "_build_trial_detail",
     "_build_weight_segment_bar",
     "_find_earliest_not_done",

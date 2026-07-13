@@ -92,6 +92,21 @@ def write_gen_summary(gen_dir: Path, gen_index: int, scores: list[float]) -> Non
     )
 
 
+def _default_restart_state(project) -> dict:
+    """The ``restart`` payload block when the orchestrator passes none (e.g. the
+    single write before the loop, or any non-restart caller)."""
+    return {
+        "restart_index": 0,
+        "restarts_max": project.cmaes_restarts,
+        "stall_count": 0,
+        "stall_limit": 0,
+        "current_popsize": project.n_parallel,
+        "fruitless_streak": 0,
+        "restart_patience": 0,
+        "run_until_converged": False,
+    }
+
+
 def write_progress(
     cfg: RunConfig,
     gen_index: int,
@@ -99,11 +114,14 @@ def write_progress(
     all_scores: list[float],
     started_at: float = 0.0,
     total_gens: int | None = None,
+    restart_state: dict | None = None,
 ) -> None:
     """Write progress.json for the dashboard to poll.
 
     ``total_gens`` is the absolute last generation of this run (offset +
     n_generations when resuming); without it a resumed run would report > 100%.
+    ``restart_state`` is the per-generation IPOP snapshot (index, popsize,
+    stall/patience counters) the dashboard's restart panel reads.
     """
     project = cfg.project
     n_parallel = project.n_parallel
@@ -142,6 +160,7 @@ def write_progress(
         ),
         "started_at": started_at,
         "updated_at": time.time(),
+        "restart": restart_state or _default_restart_state(project),
     }
 
     # Atomic: the dashboard polls this file while the run writes it.

@@ -53,10 +53,36 @@ def _build_performance_graph(records: list[dict], summaries: list[dict]) -> go.F
         # Cosmetic animation only; transition support varies across plotly versions.
         with contextlib.suppress(Exception):
             fig.layout.transition = dict(duration=600, easing="cubic-in-out")
+        _add_restart_markers(fig)
         return fig
     except Exception as exc:
         logger.warning(f"[warn] Error building performance graph: {exc}")
         return go.Figure().add_annotation(text=f"Error: {exc}")
+
+
+def _add_restart_markers(fig: go.Figure) -> None:
+    """Dotted vertical line at each IPOP restart (see core/restart_events.py).
+
+    Self-contained and best-effort like ``_build_video_markers``: a failure
+    here must degrade to "no markers", never replace the whole graph — so it
+    runs after the figure is otherwise complete, inside its own guard.
+    """
+    # Cosmetic only — a marker failure must never blank the whole graph.
+    with contextlib.suppress(Exception):
+        from sofaopt.core.restart_events import load_restart_events
+        for ev in load_restart_events(_ctx.trials_dir()):
+            fig.add_vline(
+                x=ev["trial_chron"],
+                line_dash="dot",
+                line_color="#868e96",
+                opacity=0.6,
+                annotation_text=(
+                    f"restart {ev['restart_index']}: "
+                    f"{ev['old_popsize']}→{ev['new_popsize']}"
+                ),
+                annotation_position="top",
+                annotation_font_size=10,
+            )
 
 
 def _build_video_markers(records: list[dict], plot_data: dict) -> list:

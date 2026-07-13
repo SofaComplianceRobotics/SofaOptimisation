@@ -13,7 +13,7 @@ from pathlib import Path
 
 from sofaopt.core import envkeys
 from sofaopt.core.algorithm import _seed_sampler, build_study, recover_interrupted_trials
-from sofaopt.core.restart import maybe_restart
+from sofaopt.core.restart import maybe_restart, restart_index, restart_popsize
 from sofaopt.core.runlock import acquire_run_lock, release_run_lock
 from sofaopt.core.generation.runner import run_generation
 from sofaopt.core.generation.types import RunHistory
@@ -282,6 +282,26 @@ class _StallTracker:
         self.count = 0
 
 
+def _compute_restart_state(study, project, stall: "_StallTracker", fruitless_streak: int) -> dict:
+    """Per-generation IPOP snapshot for progress.json (dashboard restart panel).
+
+    A plain read of the study/stall state — no side effects. The population
+    grows only after a real restart, so ``current_popsize`` is ``n_parallel``
+    until then.
+    """
+    index = restart_index(study) if project.sampler == "cmaes" else 0
+    return {
+        "restart_index": index,
+        "restarts_max": project.cmaes_restarts,
+        "stall_count": stall.count,
+        "stall_limit": stall.limit,
+        "current_popsize": restart_popsize(project, index) if index > 0 else project.n_parallel,
+        "fruitless_streak": fruitless_streak,
+        "restart_patience": getattr(project, "restart_patience", 0),
+        "run_until_converged": getattr(project, "run_until_converged", False),
+    }
+
+
 def _run(project: SofaOptProject, cfg: RunConfig) -> None:
     # Windows consoles default to cp1252; make sure framework logging (and any
     # non-ASCII in scene output) never crashes the run on an encode error.
@@ -307,12 +327,20 @@ def _run(project: SofaOptProject, cfg: RunConfig) -> None:
 
     total_gens = gen_offset + project.n_generations
     stall = _StallTracker(0 if project.multi_objective else project.stall_generations)
+    fruitless_streak = 0  # consecutive restarts without a global-best gain (Feature C)
     for gen in range(gen_offset + 1, total_gens + 1):
-        write_progress(cfg, gen, 0, history.all_scores, started_at, total_gens=total_gens)
+        restart_state = _compute_restart_state(study, project, stall, fruitless_streak)
+        write_progress(
+            cfg, gen, 0, history.all_scores, started_at,
+            total_gens=total_gens, restart_state=restart_state,
+        )
         logger.info(f"\n{'=' * 50}\nGeneration {gen}/{total_gens}\n{'=' * 50}")
 
         trials = [study.ask() for _ in range(project.n_parallel)]
-        run_generation(cfg, gen, trials, study, env, history, started_at, total_gens=total_gens)
+        run_generation(
+            cfg, gen, trials, study, env, history, started_at,
+            total_gens=total_gens, restart_state=restart_state,
+        )
 
         if project.record_frames:
             _apply_overlays_safely(project, gen)

@@ -222,6 +222,8 @@ def comparison_data(
     best_score, best_params, n_trials, sampler, notes}`` — everything read
     from recorded results, nothing recomputed.
     """
+    from sofaopt.core.restart_events import load_restart_events
+
     entries: list[dict] = []
     for archive in archives:
         path = _resolve_archive(project, archive)
@@ -236,6 +238,7 @@ def comparison_data(
                 "sampler": info.sampler,
                 "notes": info.notes,
                 "info": info,
+                "restarts": load_restart_events(info.trials_dir),
             }
         )
     if include_current and runtime_has_run_data(project):
@@ -252,6 +255,7 @@ def comparison_data(
                 "sampler": project.sampler,
                 "notes": "",
                 "info": None,
+                "restarts": load_restart_events(project.trials_dir),
             }
         )
     return entries
