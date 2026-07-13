@@ -11,6 +11,8 @@ import time
 
 from pathlib import Path
 
+import optuna
+
 from sofaopt.core import envkeys
 from sofaopt.core.algorithm import _seed_sampler, build_study, recover_interrupted_trials
 from sofaopt.core.restart import maybe_restart, restart_index, restart_popsize
@@ -297,6 +299,37 @@ def _best_value(study) -> float | None:
         return None
 
 
+def _use_convergence_trigger(project) -> bool:
+    """Convergence-triggered restarts apply only to single-objective CMA-ES."""
+    return (
+        project.restart_on_convergence
+        and project.sampler == "cmaes"
+        and not project.multi_objective
+    )
+
+
+def _cma_converged(study) -> bool:
+    """True once the CMA-ES sampler's internal optimizer has actually converged
+    (``should_stop``) — the honest restart trigger, versus the best-plateau
+    heuristic that fires while the search is still productive.
+
+    Reached through the sampler's private ``_restore_optimizer`` seam (the same
+    interface the restart scoping relies on). Returns False when no optimizer is
+    restorable yet — early generations, or just after a restart — which also
+    prevents a restart storm (the fresh restart reads 'not converged')."""
+    restore = getattr(study.sampler, "_restore_optimizer", None)
+    if restore is None:
+        return False
+    try:
+        completed = study.get_trials(
+            deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,)
+        )
+        optimizer = restore(completed)
+        return bool(optimizer is not None and optimizer.should_stop())
+    except Exception:
+        return False
+
+
 class _RestartProductivity:
     """Tracks whether restarts keep paying off (``run_until_converged``).
 
@@ -371,8 +404,8 @@ def _handle_stall(
         stall.reset()
         return False
     logger.info(
-        f"[stall] Best score unchanged for {stall.count} generations "
-        f"— stopping early at generation {gen}/{total_gens}."
+        f"[stop] No further restart available — stopping early at "
+        f"generation {gen}/{total_gens}."
     )
     return True
 
@@ -423,7 +456,13 @@ def _run(project: SofaOptProject, cfg: RunConfig) -> None:
         _print_best_so_far(study, project)
         prune_count = _maybe_prune_recordings(project, gen, prune_count)
 
-        if stall.should_stop(study) and _handle_stall(
+        # Keep the stall tracker updated every generation (its count/best drive
+        # the dashboard patience display), but use CMA-ES's real convergence as
+        # the restart trigger when configured — the plateau heuristic fires
+        # while the search is still productive and makes restarts net-harmful.
+        stalled = stall.should_stop(study)
+        triggered = _cma_converged(study) if _use_convergence_trigger(project) else stalled
+        if triggered and _handle_stall(
             study, project, stall, productivity, gen=gen, history=history,
             total_gens=total_gens,
         ):

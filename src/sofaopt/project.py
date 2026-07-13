@@ -302,6 +302,24 @@ class SofaOptProject:
     """Population-size multiplier applied at each IPOP restart (default 2).
     The internal CMA population grows past ``n_parallel``, so one CMA update
     then spans several sofaopt generations — that is expected and fine."""
+    restart_on_convergence: bool = False
+    """Trigger restarts (and ``run_until_converged``) on CMA-ES's *actual*
+    convergence instead of the ``stall_generations`` best-plateau. The plateau
+    heuristic fires while the search is still productive and makes restarts
+    net-harmful; the convergence signal (the internal optimizer's
+    ``should_stop``) only fires once CMA-ES has genuinely converged, so a
+    restart never interrupts a working search. **Recommended whenever
+    ``cmaes_restarts > 0``** — measured to turn restarts from net-negative into
+    do-no-harm-at-tight-budget / helpful-at-large-budget (see
+    ``examples/landscape``). Only applies to ``sampler="cmaes"``; with it set,
+    ``stall_generations`` is no longer required to be > 0."""
+    warm_restarts: bool = False
+    """Re-seed each restart from the current incumbent (best-so-far) with an
+    inflated spread, instead of a uniform-random point. Re-explores the
+    promising region rather than jumping somewhere usually-worse — measured to
+    match or beat cold random restarts across the benchmark, most on deceptive
+    landscapes. Only applies when ``sampler="cmaes"`` and ``cmaes_restarts >
+    0``."""
     run_until_converged: bool = False
     """Self-size the run: ``n_generations`` becomes a safety ceiling, not a
     target. The run keeps restarting on each stall and stops once
@@ -396,23 +414,26 @@ class SofaOptProject:
             raise ValueError("cmaes_restarts must be >= 0.")
         if self.cmaes_inc_popsize < 1:
             raise ValueError("cmaes_inc_popsize must be >= 1.")
-        if self.cmaes_restarts > 0 and self.stall_generations <= 0:
+        # A restart needs SOME trigger: the stall plateau, or convergence.
+        has_trigger = self.stall_generations > 0 or self.restart_on_convergence
+        if self.cmaes_restarts > 0 and not has_trigger:
             raise ValueError(
-                "cmaes_restarts > 0 needs stall_generations > 0 — the stall "
-                "tracker is what triggers a restart."
+                "cmaes_restarts > 0 needs a restart trigger — set "
+                "stall_generations > 0 or restart_on_convergence=True."
             )
+        if self.warm_restarts and self.cmaes_restarts <= 0:
+            raise ValueError("warm_restarts=True needs cmaes_restarts > 0.")
         if self.run_until_converged and (
             self.cmaes_restarts <= 0
-            or self.stall_generations <= 0
+            or not has_trigger
             or self.restart_patience < 1
             or self.sampler != "cmaes"
             or self.multi_objective
         ):
             raise ValueError(
-                "run_until_converged=True needs cmaes_restarts > 0, "
-                "stall_generations > 0, restart_patience >= 1, sampler='cmaes' "
-                "and single-objective — it makes the restart-budget stall signal "
-                "the sole termination condition."
+                "run_until_converged=True needs cmaes_restarts > 0, a restart "
+                "trigger (stall_generations > 0 or restart_on_convergence=True), "
+                "restart_patience >= 1, sampler='cmaes' and single-objective."
             )
 
     def _validate_multi_objective(self) -> None:

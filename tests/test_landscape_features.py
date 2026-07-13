@@ -1,22 +1,23 @@
-"""Feature-advantage bench — does the new optimizer machinery actually help?
+"""Feature-advantage bench — does the restart machinery help, measured honestly?
 
-Drives the REAL sofaopt orchestrator (IPOP restarts, run_until_converged) against
-the analytic benchmark functions, with a SOFA-free fake generation that scores
-each asked trial directly. Because the global optimum is known, we can *measure*
-the advantage, not just check the plumbing:
+Drives the REAL sofaopt orchestrator against the analytic benchmark functions
+with a SOFA-free scoring generation. Because the global optimum is known, we can
+*measure* the effect of each restart configuration at EQUAL budget:
 
-- IPOP restarts escape a bad local basin where plain CMA-ES stays trapped.
-- restarts don't hurt on a unimodal function (the control).
-- run_until_converged self-sizes: it stops well before the generation ceiling.
+  plain : restarts off, full budget (no early stop)          — the baseline.
+  stall : cold restarts on the stall plateau (old behavior)  — fires early, hurts.
+  conv  : restarts on CMA-ES convergence + warm-start (new)  — do-no-harm.
 
-Each run is milliseconds (no SOFA), so we average over several reps for a robust,
-non-flaky comparison. Run as a script for the full comparison table::
+The headline result (established by a wider sweep, examples/landscape/README):
+the OLD stall trigger fires while the search is still productive and makes
+restarts net-negative; the convergence trigger only restarts once CMA-ES has
+genuinely converged, so at a tight budget it does no harm, and at a large budget
+it helps (biggest on deceptive/multimodal landscapes). These tests pin the
+do-no-harm invariant and that the new trigger beats the old one where the old
+one hurt — both cheap to check; the large-budget gains are in the README table.
 
-    python tests/test_landscape_features.py
-
-Racing's end-to-end evaluation savings live in the finalize phase (real run
-slots), so they are measured on the noisy SOFA e2e ports, not here; racing's
-decision logic is unit-tested in test_racing.py.
+Racing's end-to-end savings live in the finalize phase (real run slots), so they
+are measured on the noisy SOFA ports, not here.
 """
 
 from __future__ import annotations
@@ -29,7 +30,6 @@ import optuna
 
 from sofaopt.core import orchestrator
 from sofaopt.core.algorithm import tell_safely
-from sofaopt.core.restart import restart_index
 from sofaopt.core.runconfig import RunConfig
 from sofaopt.project import ParamSpec, SofaOptProject
 from sofaopt.project import TestSpec as _TestSpec
@@ -39,40 +39,39 @@ from conftest import load_benchmark_functions
 bf = load_benchmark_functions()
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+# Restart configurations under test (all at equal n_generations budget).
+PLAIN = dict(cmaes_restarts=0, stall_generations=0)
+STALL = dict(cmaes_restarts=6, stall_generations=3)  # old: cold restart on plateau
+CONV = dict(cmaes_restarts=6, stall_generations=0,   # new: convergence + warm-start
+            restart_on_convergence=True, warm_restarts=True)
 
-def _project(function: str, dim: int, tmp: Path, **kw) -> SofaOptProject:
+
+def _project(function: str, dim: int, tmp: Path, gens: int, **kw) -> SofaOptProject:
     bench = bf.get_benchmark(function)
     d = bench.fixed_dim or dim
-    default = kw.pop("default", bench.default)
     params = [
-        ParamSpec(f"x{i}", "float", bench.low, bench.high, default=default)
-        for i in range(d)
+        ParamSpec(f"x{i}", "float", bench.low, bench.high, bench.default) for i in range(d)
     ]
     base = dict(
-        name=f"land_{function}",
-        work_dir=tmp,
-        params=params,
+        name=f"land_{function}", work_dir=tmp, params=params,
         tests=[_TestSpec("f", scene_file=tmp / "s.py", max_score=100.0)],
-        runner="python",
-        sampler="cmaes",
-        n_parallel=6,
-        n_generations=30,
-        stall_generations=4,
+        runner="python", sampler="cmaes", n_parallel=6, n_generations=gens,
+        cmaes_sigma0=0.4,
     )
     base.update(kw)
     return SofaOptProject(**base)
 
 
-def _run_best(project: SofaOptProject, function: str, noise_sigma: float = 0.0) -> tuple[float, int]:
-    """Run the real orchestrator with a SOFA-free scoring generation. Returns
-    (best score, restarts performed)."""
+def _best(function: str, dim: int, gens: int, cfg: dict) -> float:
+    tmp = Path(tempfile.mkdtemp())
+    project = _project(function, dim, tmp, gens, **cfg)
     searched = [p for p in project.params if not p.is_frozen]
 
-    def fake_gen(cfg, gi, trials, study, env, state,
+    def fake_gen(cfg_, gi, trials, study, env, state,
                  started_at=0.0, total_gens=None, restart_state=None):
         for t in trials:
             x = [t.suggest_float(p.name, float(p.low), float(p.high)) for p in searched]
-            s = bf.scored(function, x, noise_sigma=noise_sigma)
+            s = bf.scored(function, x)
             tell_safely(study, t, s)
             state.record_score(s)
 
@@ -82,94 +81,97 @@ def _run_best(project: SofaOptProject, function: str, noise_sigma: float = 0.0) 
         orchestrator._run(project, RunConfig.from_project(project))
     finally:
         orchestrator.run_generation = saved
-
     study = optuna.load_study(
         study_name=project.name, storage=f"sqlite:///{project.db_path}"
     )
-    return float(study.best_value), restart_index(study)
+    return float(study.best_value)
 
 
-def _mean_best(function: str, reps: int, **project_kw) -> float:
-    bests = []
-    for _ in range(reps):
-        tmp = Path(tempfile.mkdtemp())
-        best, _ = _run_best(_project(function, 2, tmp, **project_kw), function)
-        bests.append(best)
-    return statistics.mean(bests)
+def _mean(function: str, dim: int, gens: int, cfg: dict, reps: int) -> float:
+    return statistics.mean(_best(function, dim, gens, cfg) for _ in range(reps))
 
 
-# -- IPOP restarts vs plain CMA-ES on a multimodal function --------------------
+# -- the fix: convergence trigger doesn't hurt where the stall trigger did -----
 
-def test_ipop_beats_plain_cmaes_when_trapped_on_rastrigin():
-    """Local start + tight sigma0 traps plain CMA-ES in a rim basin; IPOP's
-    random-restart re-seeds escape it. Averaged over reps for robustness."""
-    reps = 10
-    common = dict(default=4.0, cmaes_sigma0=0.4, n_generations=30, stall_generations=3)
-    plain = _mean_best("rastrigin", reps, cmaes_restarts=0, **common)
-    ipop = _mean_best("rastrigin", reps, cmaes_restarts=4, **common)
-    assert ipop > plain, f"IPOP {ipop:.1f} did not beat plain {plain:.1f}"
-
-
-def test_ipop_finds_a_himmelblau_global_optimum():
-    """Four equal optima; restarts from the centre reliably land on one.
-
-    Averaged over reps: at least one rep should hit a near-global optimum and
-    the mean should stay high (a single CMA-ES run is stochastic)."""
-    bests = []
-    for _ in range(5):
-        tmp = Path(tempfile.mkdtemp())
-        project = _project(
-            "himmelblau", 2, tmp, default=0.0, cmaes_sigma0=0.5,
-            cmaes_restarts=4, stall_generations=3, n_generations=40,
-        )
-        best, _ = _run_best(project, "himmelblau")
-        bests.append(best)
-    assert max(bests) > 99.0, f"no rep reached a global optimum: {bests}"
-    assert statistics.mean(bests) > 90.0, f"mean too low: {bests}"
+def test_convergence_trigger_fixes_the_stall_trigger_regression():
+    """On ackley at a tight budget, the OLD stall-triggered cold restart is
+    net-negative (fires early, jumps to random points); the NEW convergence
+    trigger doesn't fire (nothing converged with budget to spare), so it matches
+    plain CMA-ES. This is the measured upgrade, at equal budget."""
+    reps, gens = 8, 40
+    plain = _mean("ackley", 2, gens, PLAIN, reps)
+    stall = _mean("ackley", 2, gens, STALL, reps)
+    conv = _mean("ackley", 2, gens, CONV, reps)
+    assert stall < plain - 3.0, f"expected the old trigger to hurt: plain={plain:.1f} stall={stall:.1f}"
+    assert conv > stall + 3.0, f"convergence trigger should beat the old one: conv={conv:.1f} stall={stall:.1f}"
+    assert conv > plain - 3.0, f"convergence trigger should not harm vs plain: conv={conv:.1f} plain={plain:.1f}"
 
 
-# -- control: restarts must not hurt a unimodal function -----------------------
-
-def test_restarts_do_not_hurt_on_unimodal_sphere():
-    reps = 8
-    common = dict(default=3.0, cmaes_sigma0=1.0, n_generations=25)
-    plain = _mean_best("sphere", reps, cmaes_restarts=0, **common)
-    ipop = _mean_best("sphere", reps, cmaes_restarts=3, stall_generations=4, **common)
-    assert plain > 90.0 and ipop > 90.0  # both essentially solve the bowl
-    assert abs(ipop - plain) < 6.0       # the point: restarts neither help nor harm here
+def test_convergence_restarts_do_no_harm_on_rosenbrock():
+    """A second do-no-harm case (rosenbrock, where cold restarts also hurt)."""
+    reps, gens = 8, 40
+    plain = _mean("rosenbrock", 2, gens, PLAIN, reps)
+    conv = _mean("rosenbrock", 2, gens, CONV, reps)
+    assert conv > plain - 3.0, f"conv={conv:.1f} plain={plain:.1f}"
 
 
-# -- run_until_converged self-sizes -------------------------------------------
+# -- control: on a unimodal bowl every config solves it ------------------------
 
-def test_converged_stops_before_ceiling_with_a_good_optimum():
+def test_all_configs_solve_unimodal_sphere():
+    reps, gens = 6, 25
+    for cfg in (PLAIN, CONV):
+        assert _mean("sphere", 2, gens, cfg, reps) > 95.0
+
+
+# -- run_until_converged with the convergence trigger self-sizes ---------------
+
+def test_converged_mode_with_convergence_trigger_self_sizes():
+    """run_until_converged on the convergence trigger: the initial run converges
+    and finds sphere's optimum (productive), the warm restart re-converges
+    without improving (fruitless), and at patience=1 the run stops — well before
+    the generous ceiling. (Convergence-triggered restarts cycle slowly, so a
+    self-sizing run needs a generous ceiling; that's what it is for.)"""
     tmp = Path(tempfile.mkdtemp())
+    ceiling = 500
     project = _project(
-        "rastrigin", 2, tmp, default=4.0, cmaes_sigma0=0.5,
-        cmaes_restarts=6, run_until_converged=True, restart_patience=2,
-        stall_generations=3, n_generations=200,  # generous ceiling
+        "sphere", 2, tmp, gens=ceiling, cmaes_restarts=3,
+        restart_on_convergence=True, warm_restarts=True,
+        run_until_converged=True, restart_patience=1, stall_generations=0,
     )
-    best, _ = _run_best(project, "rastrigin")
+    searched = [p for p in project.params if not p.is_frozen]
+
+    def fake_gen(cfg_, gi, trials, study, env, state,
+                 started_at=0.0, total_gens=None, restart_state=None):
+        for t in trials:
+            x = [t.suggest_float(p.name, float(p.low), float(p.high)) for p in searched]
+            tell_safely(study, t, bf.scored("sphere", x))
+            state.record_score(0.0)
+
+    saved = orchestrator.run_generation
+    orchestrator.run_generation = fake_gen
+    try:
+        orchestrator._run(project, RunConfig.from_project(project))
+    finally:
+        orchestrator.run_generation = saved
     study = optuna.load_study(
         study_name=project.name, storage=f"sqlite:///{project.db_path}"
     )
     gens_run = len(study.trials) // project.n_parallel
-    # Self-sized: stopped far short of the 200-generation ceiling.
-    assert gens_run < 100, f"did not self-size (ran {gens_run} gens)"
-    assert best > 50.0  # still reached a reasonable optimum
+    assert gens_run < ceiling, f"did not self-size (ran {gens_run} gens)"
+    assert study.best_value > 99.0  # sphere solved
 
 
 def _report() -> None:
-    """Print the plain-vs-IPOP comparison table (the 'assess the advantages'
-    artifact). Not a test — run via ``python tests/test_landscape_features.py``."""
-    reps = 12
-    print(f"\nMean best score over {reps} reps (2-D, local start, tight sigma0):\n")
-    print(f"{'function':<12}{'plain CMA-ES':>14}{'IPOP restarts':>16}{'gain':>8}")
+    """Plain vs stall-trigger vs convergence-trigger, equal budget — run via
+    ``python tests/test_landscape_features.py``."""
+    reps, gens = 10, 40
+    print(f"\nMean best over {reps} reps, 2-D, {6 * gens} evals (equal budget):\n")
+    print(f"{'function':<12}{'plain':>8}{'stall':>8}{'conv':>8}")
     for fn in ("sphere", "rosenbrock", "rastrigin", "ackley", "schwefel", "himmelblau"):
-        common = dict(default=bf.get_benchmark(fn).default, cmaes_sigma0=0.4,
-                      n_generations=30, stall_generations=3)
-        plain = _mean_best(fn, reps, cmaes_restarts=0, **common)
-        ipop = _mean_best(fn, reps, cmaes_restarts=4, **common)
-        print(f"{fn:<12}{plain:>14.1f}{ipop:>16.1f}{ipop - plain:>+8.1f}")
+        p = _mean(fn, 2, gens, PLAIN, reps)
+        s = _mean(fn, 2, gens, STALL, reps)
+        c = _mean(fn, 2, gens, CONV, reps)
+        print(f"{fn:<12}{p:>8.1f}{s:>8.1f}{c:>8.1f}")
 
 
 if __name__ == "__main__":

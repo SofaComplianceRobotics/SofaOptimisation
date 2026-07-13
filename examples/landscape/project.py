@@ -77,12 +77,13 @@ PROJECT = SofaOptProject(
     },
     gui_mode="batch",
     n_parallel=6,
-    n_generations=60,
-    cmaes_sigma0=0.5,          # start local so restarts, not sigma, do the exploring
+    n_generations=200,         # restarts need a generous budget to pay off (see README)
+    cmaes_sigma0=0.4,
     seed_sampler="sobol",
-    # The new features, on by default so this example exercises them:
-    stall_generations=6,       # patience per basin
-    cmaes_restarts=4,          # IPOP restarts on a stall (multimodal landscape)
+    # Restarts, configured the way the benchmark showed actually helps:
+    cmaes_restarts=4,          # IPOP restarts on a multimodal landscape
+    restart_on_convergence=True,  # trigger on REAL convergence, not a best-plateau
+    warm_restarts=True,        # re-seed from the incumbent, not a random jump
     run_script=HERE / "run.py",
     record_frames=True,
     record_frame_skip=2,
@@ -108,7 +109,16 @@ PROJECT_CONVERGED = dataclasses.replace(
 # Plain CMA-ES (no restarts) — the baseline to compare restarts against on the
 # dashboard's Archives tab (run this and PROJECT back to back, then overlay).
 PROJECT_PLAIN = dataclasses.replace(
-    PROJECT, name="landscape_plain", cmaes_restarts=0, stall_generations=0,
+    PROJECT, name="landscape_plain", cmaes_restarts=0,
+    restart_on_convergence=False, warm_restarts=False, stall_generations=0,
+)
+
+# The OLD restart behavior (cold restart on a best-plateau) — kept as a variant
+# so the harm the convergence trigger fixes is reproducible: run this vs default
+# and overlay on the Archives tab.
+PROJECT_STALL_RESTART = dataclasses.replace(
+    PROJECT, name="landscape_stall_restart",
+    restart_on_convergence=False, warm_restarts=False, stall_generations=6,
 )
 
 # Noisy objective — turns on racing: start each trial with run_count_min repeats
@@ -134,6 +144,7 @@ _VARIANTS = {
     "default": PROJECT,
     "converged": PROJECT_CONVERGED,
     "plain": PROJECT_PLAIN,
+    "stall-restart": PROJECT_STALL_RESTART,
     "noisy": PROJECT_NOISY,
 }
 

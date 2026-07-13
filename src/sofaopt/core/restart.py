@@ -81,16 +81,45 @@ def _random_x0(project, index: int) -> dict:
     return x0
 
 
+# Warm restarts re-explore around the incumbent, so they start with a wider
+# spread than the (already-converged) incumbent basin — measured on the
+# benchmark to match/beat cold restarts (examples/landscape).
+_WARM_SIGMA_INFLATE = 2.0
+
+
+def warm_x0(project, incumbent_params: dict) -> dict:
+    """The incumbent restricted to the searched float/int params — the CMA-ES
+    ``x0`` for a warm restart (same param selection as ``_random_x0``)."""
+    return {
+        p.name: incumbent_params[p.name]
+        for p in project.params
+        if not p.is_frozen and p.type in ("float", "int") and p.name in incumbent_params
+    }
+
+
 def build_restart_sampler(
-    project, index: int, independent_sampler: optuna.samplers.BaseSampler
+    project,
+    index: int,
+    independent_sampler: optuna.samplers.BaseSampler,
+    warm_start: dict | None = None,
 ) -> optuna.samplers.BaseSampler:
     """The CMA-ES sampler for restart ``index`` (index 0 = the initial one is
     built by ``build_study``, not here). No startup phase: the landscape was
-    explored before the first stall; the restart goes straight to CMA-ES."""
+    explored before the stall/convergence; the restart goes straight to CMA-ES.
+
+    ``warm_start`` (an incumbent x0) re-seeds around the best-so-far with an
+    inflated spread; otherwise the restart uses a uniform-random point (IPOP).
+    """
+    if warm_start:
+        x0: dict | None = warm_start or None
+        sigma0 = project.cmaes_sigma0 * _WARM_SIGMA_INFLATE
+    else:
+        x0 = _random_x0(project, index) or None
+        sigma0 = project.cmaes_sigma0
     return _RestartScopedCmaEsSampler(
         restart_index=index,
-        x0=_random_x0(project, index) or None,
-        sigma0=project.cmaes_sigma0,
+        x0=x0,
+        sigma0=sigma0,
         popsize=restart_popsize(project, index),
         n_startup_trials=0,
         consider_pruned_trials=True,
@@ -152,15 +181,22 @@ def maybe_restart(
         return None
 
     new_index = index + 1
+    warm = None
+    if project.warm_restarts:
+        with contextlib.suppress(ValueError):  # no incumbent yet -> cold restart
+            warm = warm_x0(project, study.best_trial.params)
     study.set_user_attr(RESTART_ATTR, new_index)
-    study.sampler = build_restart_sampler(project, new_index, independent_sampler)
+    study.sampler = build_restart_sampler(
+        project, new_index, independent_sampler, warm_start=warm
+    )
     event = _build_restart_event(
         study, project, index, new_index, gen=gen, trial_chron=trial_chron
     )
     record_restart_event(project.trials_dir, event)
+    seed = "incumbent (warm)" if warm else "uniform-random"
     logger.info(
         f"[restart] IPOP restart {new_index}/{project.cmaes_restarts}: "
         f"popsize {event.old_popsize} -> {event.new_popsize}, "
-        f"sigma0 {project.cmaes_sigma0}, uniform-random x0."
+        f"sigma0 {project.cmaes_sigma0}, {seed} x0."
     )
     return event
