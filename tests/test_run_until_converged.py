@@ -150,3 +150,45 @@ def test_write_progress_converged_reports_restart_position():
     assert payload["gen_total"] is None
     assert payload["pct"] is None
     assert payload["restart_progress"] == "restart 2, 1/2 fruitless"
+
+
+# -- loop-level integration: the run self-terminates on convergence ------------
+
+def test_converged_run_stops_on_fruitless_streak_not_ceiling(monkeypatch):
+    """Drive the real orchestrator loop with a synthetic constant objective
+    (no SOFA): the best plateaus immediately, so restarts go fruitless and the
+    run must stop via convergence well before the n_generations ceiling —
+    writing one restart event per restart to restarts.json."""
+    import json
+
+    from sofaopt.core import orchestrator
+    from sofaopt.core.algorithm import tell_safely
+    from sofaopt.core.restart_events import load_restart_events
+    from sofaopt.core.runconfig import RunConfig
+
+    # A constant score: gen 1 sets the best, every later basin fails to beat it.
+    def fake_run_generation(cfg, gen_index, trials, study, env, state,
+                            started_at=0.0, total_gens=None, restart_state=None):
+        for t in trials:
+            t.suggest_float("a", 0.0, 1.0)  # give CMA-ES a real params vector
+            tell_safely(study, t, 10.0)
+            state.record_score(10.0)
+
+    monkeypatch.setattr(orchestrator, "run_generation", fake_run_generation)
+
+    # patience 2, restart budget 3 (not the limiter), high generation ceiling.
+    project = _project(
+        stall_generations=2, restart_patience=2, cmaes_restarts=3, n_generations=50
+    )
+    orchestrator._run(project, RunConfig.from_project(project))
+
+    events = load_restart_events(project.trials_dir)
+    # Converged after 2 fruitless restarts (indices 1 and 2); budget of 3 unused,
+    # ceiling of 50 never reached.
+    assert [e["restart_index"] for e in events] == [1, 2]
+    assert events[-1]["new_popsize"] == project.n_parallel * project.cmaes_inc_popsize**2
+
+    progress = json.loads(project.progress_file.read_text(encoding="utf-8"))
+    assert progress["restart"]["run_until_converged"] is True
+    # Stopped on convergence, not the 50-generation ceiling.
+    assert progress["gen_current"] < 50
