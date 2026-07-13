@@ -321,7 +321,11 @@ def _run(project: SofaOptProject, cfg: RunConfig) -> None:
         prune_count = _maybe_prune_recordings(project, gen, prune_count)
 
         if stall.should_stop(study):
-            if maybe_restart(study, project, _seed_sampler(project)):
+            event = maybe_restart(
+                study, project, _seed_sampler(project),
+                gen=gen, trial_chron=len(history.all_scores),
+            )
+            if event:
                 stall.reset()
                 continue
             logger.info(
