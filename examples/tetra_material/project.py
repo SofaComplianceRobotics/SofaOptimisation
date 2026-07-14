@@ -14,8 +14,8 @@ covariance is built to learn. The ``noisy`` variant adds sensor-style score
 noise, turning on racing (``run_count_min``).
 
 Reference/target provenance: see TARGET_APEX in ``scene.py`` — measured
-2026-07-13 with the reference material (young_modulus=10, poisson_ratio=0.30,
-total_mass=2.0) via the python runner; command in the README.
+2026-07-13 with the reference material (young_modulus=4, poisson_ratio=0.30,
+total_mass=5.0) via the python runner; command in the README.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ HERE = Path(__file__).resolve().parent
 
 # Reference material the target was measured from. The ParamSpec defaults below
 # are deliberately OFF these values so the optimizer has an identification task.
-REFERENCE = {"young_modulus": 10.0, "poisson_ratio": 0.30, "total_mass": 2.0}
+REFERENCE = {"young_modulus": 4.0, "poisson_ratio": 0.30, "total_mass": 5.0}
 
 PROJECT = SofaOptProject(
     name="tetra_material",
