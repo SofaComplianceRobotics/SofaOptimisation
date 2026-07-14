@@ -94,3 +94,21 @@ python ../../tests/test_landscape_features.py
 
 This is exactly why a real benchmark (not a rigged toy) is worth having: it
 caught a shipped feature that was net-negative, and pointed at the fix.
+
+### Alternatives tested and rejected (don't re-litigate without new data)
+
+Each was prototyped on this harness and measured against the shipped
+convergence-trigger + warm-IPOP configuration at equal budget:
+
+- **`lr_adapt` (CMA-ES learning-rate adaptation)** — helps schwefel (+7) but
+  hurts ackley (−12) and is slightly negative elsewhere. Net-negative.
+- **BIPOP (budget-matched large-cold / small-warm regimes)** — ties or loses to
+  warm-IPOP on rastrigin at every dimension (e.g. 94.0 vs 97.1 at dim 10); only
+  a mixed ±3 picture on schwefel. Not worth the extra restart-state complexity.
+- **Flat-popsize warm restarts (no IPOP growth)** — clearly worse on rastrigin
+  (92.7 vs 97.1 at dim 10). The growing population is doing real work.
+- **Warm-sigma inflation recalibration** — ×1.0/×1.5/×2.0/×3.0 all within ±2
+  with no consistent direction; the shipped ×2.0 stands.
+
+The shipped defaults are therefore at the measured optimum of this design
+space; a future challenger should beat them *here* before shipping.
