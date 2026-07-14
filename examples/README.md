@@ -46,3 +46,12 @@ anchors + provenance, the regeneration recipe for its target, and the
 interactive `runSofa` replay command. The `tests/test_e2e_<name>.py` files
 re-run the anchor trials through the production launch primitives and assert
 the provenance bands.
+
+## Feature studies
+
+[`prefix_pruning_study/`](prefix_pruning_study/) drives trace-collecting
+campaigns on the study platforms and replays candidate multi-fidelity pruning
+schedules offline (rank validity + simulated savings/regret) — the measurement
+half of `docs/design/multi-fidelity.md`. Both platforms report an anytime
+`partial_score` in their live status and, under `OPT_SCORE_TRACE=1`, write
+per-run score traces for it.

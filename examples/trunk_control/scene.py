@@ -64,6 +64,10 @@ SCORE_SCALE = 40.0         # score = 100 * exp(-rms / SCORE_SCALE); rms is the
 #                            -> 22; the opposite actuation rms 97.6 -> 9;
 #                            reference rms 0 -> 100 (trunk backbone ~195 long).
 
+TRACE_EVERY = 5            # anytime-score cadence (steps): partial_score in the
+#                            live status + optional on-disk trace. Observation
+#                            only — never feeds back into the physics.
+
 _PLUGINS = [
     "SoftRobots",
     "Sofa.Component.AnimationLoop",
@@ -152,6 +156,9 @@ class TrunkAllocator(Sofa.Core.Controller):
         self.calm_steps = 0
         self.prev = None
         self.done = False
+        self.partial_score = None   # anytime score-so-far (refreshed every TRACE_EVERY)
+        self.trace = []             # [(step, anytime score)] when OPT_SCORE_TRACE is set
+        self.trace_enabled = bool(trial.env.get("OPT_SCORE_TRACE")) and trial.is_optimizing
 
     def _resolve_backbone(self):
         rest = self.dofs.rest_position.value
@@ -192,11 +199,7 @@ class TrunkAllocator(Sofa.Core.Controller):
             speed = max(math.dist(a, b) for a, b in zip(bb, self.prev, strict=True))
         self.prev = bb
         self.calm_steps = 0 if ramping or speed >= SETTLE_SPEED else self.calm_steps + 1
-
-        self.trial.write_status(
-            {"state": "running", "current_frame": self.step, "total_frames": HORIZON_STEPS},
-            min_interval=0.2,
-        )
+        self._write_live_status(bb)
 
         if self.calm_steps >= SETTLE_STEPS:
             self.done = True
@@ -204,6 +207,37 @@ class TrunkAllocator(Sofa.Core.Controller):
         elif self.step >= HORIZON_STEPS:
             self.done = True
             self._report(bb, f"horizon at step {self.step} (slow settle)")
+
+    def _write_live_status(self, bb):
+        """Live progress + anytime score for the optimizer (observation only)."""
+        status = {"state": "running", "current_frame": self.step, "total_frames": HORIZON_STEPS}
+        if TARGET_BACKBONE is not None and self.step % TRACE_EVERY == 0:
+            self.partial_score = score_from_rms(rms_to_target(bb, TARGET_BACKBONE))
+            if self.trace_enabled:
+                self.trace.append((self.step, round(self.partial_score, 4)))
+        if self.partial_score is not None:
+            status["partial_score"] = round(self.partial_score, 4)
+        self.trial.write_status(status, min_interval=0.2)
+
+    def _write_trace(self, final_score, end_reason):
+        """Persist the anytime-score trace BEFORE write_score (which kills us)."""
+        import json
+
+        trial_dir = self.trial.trial_dir
+        if not self.trace_enabled or trial_dir is None:
+            return
+        payload = {
+            "test_name": self.trial.test_name or "trunk",
+            "run_slot": self.trial.run_slot,
+            "trace_every": TRACE_EVERY,
+            "horizon_steps": HORIZON_STEPS,
+            "points": self.trace,
+            "final_score": round(final_score, 4),
+            "end_step": self.step,
+            "end_reason": end_reason,
+        }
+        path = trial_dir / f"score_trace_run{self.trial.run_slot}.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
 
     def _report(self, backbone, reason):
         if self.dump_path:  # measurement mode: record the backbone
@@ -217,6 +251,7 @@ class TrunkAllocator(Sofa.Core.Controller):
             rms = rms_to_target(backbone, TARGET_BACKBONE)
             score, detail = score_from_rms(rms), f"rms {rms:.4f}"
         if self.trial.is_optimizing:
+            self._write_trace(score, reason)
             self.trial.write_score(score, reason=f"{reason}; {detail}")
         else:
             print(f"[trunk] {reason}; {detail} -> score {score:.2f}")

@@ -15,6 +15,9 @@ archives/
 *.db-journal
 *.mp4
 
+# prefix-pruning study campaign outputs (traces + reports)
+examples/prefix_pruning_study/runs/
+
 # OS / editor
 .DS_Store
 .idea/

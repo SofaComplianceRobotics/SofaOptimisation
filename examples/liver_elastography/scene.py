@@ -65,6 +65,10 @@ SCORE_SCALE = 0.15         # score = 100 * exp(-rms / SCORE_SCALE); rms is the
 #                            root-mean-square node distance to the target shape
 #                            over the free nodes (calibrated: README anchors).
 
+TRACE_EVERY = 5            # anytime-score cadence (steps): partial_score in the
+#                            live status + optional on-disk trace. Observation
+#                            only — never feeds back into the physics.
+
 _PLUGINS = [
     "Sofa.Component.ODESolver.Backward",
     "Sofa.Component.LinearSolver.Iterative",
@@ -145,6 +149,14 @@ class Settler(Sofa.Core.Controller):
         self.step = 0
         self.calm_steps = 0
         self.done = False
+        self.partial_score = None   # anytime score-so-far (refreshed every TRACE_EVERY)
+        self.trace = []             # [(step, anytime score)] when OPT_SCORE_TRACE is set
+        self.trace_enabled = bool(trial.env.get("OPT_SCORE_TRACE")) and trial.is_optimizing
+
+    def _anytime_score(self) -> float:
+        """Score the CURRENT shape as if the run ended now (observation only)."""
+        positions = self.dofs.position.value
+        return score_from_rms(rms_to_target(positions, self.target))
 
     def onAnimateEndEvent(self, _event):
         if self.done:
@@ -154,10 +166,14 @@ class Settler(Sofa.Core.Controller):
         max_speed = max(math.sqrt(sum(float(v) ** 2 for v in row)) for row in vel)
         self.calm_steps = self.calm_steps + 1 if max_speed < SETTLE_SPEED else 0
 
-        self.trial.write_status(
-            {"state": "running", "current_frame": self.step, "total_frames": HORIZON_STEPS},
-            min_interval=0.2,
-        )
+        status = {"state": "running", "current_frame": self.step, "total_frames": HORIZON_STEPS}
+        if self.target is not None and self.step % TRACE_EVERY == 0:
+            self.partial_score = self._anytime_score()
+            if self.trace_enabled:
+                self.trace.append((self.step, round(self.partial_score, 4)))
+        if self.partial_score is not None:
+            status["partial_score"] = round(self.partial_score, 4)
+        self.trial.write_status(status, min_interval=0.2)
 
         if self.calm_steps >= SETTLE_STEPS:
             self.done = True
@@ -165,6 +181,24 @@ class Settler(Sofa.Core.Controller):
         elif self.step >= HORIZON_STEPS:
             self.done = True
             self._report(f"horizon at step {self.step} (slow settle)")
+
+    def _write_trace(self, final_score, end_reason):
+        """Persist the anytime-score trace BEFORE write_score (which kills us)."""
+        trial_dir = self.trial.trial_dir
+        if not self.trace_enabled or trial_dir is None:
+            return
+        payload = {
+            "test_name": self.case,
+            "run_slot": self.trial.run_slot,
+            "trace_every": TRACE_EVERY,
+            "horizon_steps": HORIZON_STEPS,
+            "points": self.trace,
+            "final_score": round(final_score, 4),
+            "end_step": self.step,
+            "end_reason": end_reason,
+        }
+        path = trial_dir / f"score_trace_run{self.trial.run_slot}.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
 
     def _report(self, reason):
         positions = [[float(v) for v in row] for row in self.dofs.position.value]
@@ -179,6 +213,7 @@ class Settler(Sofa.Core.Controller):
             rms = rms_to_target(positions, self.target)
             score, detail = score_from_rms(rms), f"rms {rms:.4f}"
         if self.trial.is_optimizing:
+            self._write_trace(score, reason)
             self.trial.write_score(score, reason=f"{reason}; {detail}")
         else:
             print(f"[elasto:{self.case}] {reason}; {detail} -> score {score:.2f}")
