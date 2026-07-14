@@ -1,12 +1,15 @@
 # Multi-fidelity optimization — investigation & design
 
-*Status: investigation, two rounds. Round 1 (2026-07-11, branch `investigate`):
-design analysis, no code. Round 2 (2026-07-15, on `feature/benchmark-examples`,
-after racing + restarts + the example ladder landed): the measurement half is
-now REAL — the two study platforms report an anytime `partial_score`, and
+*Status: three rounds. Round 1 (2026-07-11, branch `investigate`): design
+analysis, no code. Round 2 (2026-07-15, on `feature/benchmark-examples`): the
+measurement half — study platforms report an anytime `partial_score`,
 `examples/prefix_pruning_study/` replays recorded campaigns against candidate
-pruning schedules. §7 has measured numbers. The pruning machinery itself
-(Phase 1) is still not implemented; that starts after user review.*
+schedules, §7 has the measured numbers. Round 3 (same day, user go-ahead):
+**Phase 1 is implemented** — `core/generation/pruning.py`, `prune_mode`
+off/shadow/kill (off by default everywhere), `TestSpec.prunable` +
+`prune_rungs`, `Trial.report_progress()`, shadow validated live, and the
+closed-loop equal-budget e2e (§8) passing: 35% of startup-generation steps
+saved at score parity with zero winner kills.*
 
 SOFA trials are expensive and naturally fidelity-scalable: fewer simulation
 steps, coarser mesh, shorter horizon, fewer repeats. A successive-halving
@@ -138,38 +141,50 @@ not change what CMA-ES samples next (in reality pruned trials feed the
 sampler their last partial value via `consider_pruned_trials`). Closed-loop
 effect on convergence is measured in the Phase-1 e2e (§8), not here.
 
-### Phase 1 — early-kill pruning in the finalize loop (next, after review)
+### Phase 1 — early-kill pruning in the finalize loop (IMPLEMENTED 2026-07-15)
 
-As in round 1 — a `_check_rungs(entry)` step in `_scan_runs` next to the
-wall-clock timeout: bridge partial scores → `trial.report(value, step)`;
-decide by rule; kill via `prune_trial()`; tell via the existing pruned path.
-Two decision rules: `"quantile"` (rung-synchronized within the generation,
-never below `prune_min_survivors` = µ — CMA-ES-safe) and Optuna
-ASHA/median via `should_prune()` for TPE/GP. Revisions from the measurements:
+As shipped (`src/sofaopt/core/generation/pruning.py`; hook: the
+`_GenerationFinalizer` calls `pruner.check()` at the top of every settle
+pass, next to the wall-clock timeout):
 
-- **Rungs are absolute steps per test**, not horizon fractions:
-  `TestSpec.prune_rung_steps: tuple[int, ...]`, calibrated by trace replay
-  (the study platforms get calibrated values from §7). A later nicety may
-  auto-place rungs at quantiles of the observed settle-step distribution.
-- **Staged schedules beat one aggressive rung**: two rungs (8→6→4) kept most
-  of the best single rung's savings with zero measured regret on liver (§7).
-- Config sketch (validators split per concern, as `__post_init__` now
-  anticipates):
+- **Rule**: rung-synchronized quantile within the generation. A rung
+  `(step, keep_fraction)` fires once every non-terminal run has reached
+  `step` (or finished); candidates rank by `partial_score` (terminal ones by
+  their final score, unscored failures at −inf, occupying the bottom without
+  being "killable"), and the bottom beyond `ceil(population × keep_fraction)`
+  are stopped. A wedged run cannot deadlock a rung — the wall-clock timeout
+  eventually makes it terminal.
+- **Config as shipped** (leaner than the round-2 sketch): per test,
+  `TestSpec.prunable` + `prune_rungs: ((step, keep_fraction), ...)` — the
+  keeps live with the steps, so there is no separate `prune_eta` /
+  `prune_min_survivors`; project-level, only
+  `prune_mode: "off" | "shadow" | "kill"` (default off; every project stays
+  behavior-neutral until it opts in). Validators: prunable requires
+  `run_count == 1`, ungated, non-relaunchable, ascending steps,
+  non-increasing fractions; `prune_mode` requires the v1 single-test shape;
+  warnings on `kill` below λ=8 and on a last keep fraction < 0.5 (the CMA-ES
+  µ rule). The Optuna ASHA/median rules for TPE/GP are **deferred** — a
+  `prune_rule` field arrives with them.
+- **Safety ladder**: `"shadow"` runs the full decision path but only logs and
+  marks the run slot (`shadow_prune_step`/`shadow_prune_note`); `"kill"` goes
+  through the existing `prune_trial()` (process tree killed, slots + trial
+  pruned, told PRUNED). Before any rung's kills, every live candidate's
+  partial is bridged to Optuna via `trial.report(value, step)`, so a pruned
+  trial's last intermediate value is its partial at the rung — this is what
+  finally activates `CmaEsSampler(consider_pruned_trials=True)`.
+- **Scene sugar**: `Trial.report_progress(score, frame, total)` (porting
+  guide §2). A prunable test whose scene reaches a rung without ever
+  reporting `partial_score` disables pruning for the generation with a
+  warning — never guess.
+- `trunk_control` ships the §7-calibrated schedule
+  (`prune_rungs=((117, 0.75), (257, 0.5))`, `prune_mode` still off).
 
-```python
-prune_mode: Literal["off", "shadow", "kill"] = "off"   # shadow = pre-flight
-prune_rule: Literal["quantile", "asha", "median"] = "quantile"
-prune_eta: float = 2.0
-prune_min_survivors: int | None = None                  # None → ceil(n_parallel/2)
-# per test: TestSpec.prunable + TestSpec.prune_rung_steps
-```
-
-**v1 scope**: single-objective, one ungated non-relaunchable prunable test,
-`run_count == 1` — exactly `trunk_control`'s shape. The liver (3 weighted
+**v1 scope** (validator-enforced): single-objective, exactly one test,
+prunable, `run_count == 1` — `trunk_control`'s shape. The liver (3 weighted
 tests sharing params) needs a trial-level partial aggregate; the replay
 already ranks trials by the unweighted mean of per-run partials (= the
-recorded final combine for equal weights), and §7 shows it works — so the
-multi-test extension is data-supported but still second in line.
+recorded final combine for equal weights), and §7 shows it works — the
+multi-test extension is data-supported and next in line.
 
 ### Phase 2 — restart fidelities (deferred, likely never)
 
@@ -321,7 +336,7 @@ trunk's calibration is the conservative rung 145 (or staged 117/257).
   end by the zero-regret schedules and exceeded by the aggressive ones;
   "several-fold" remains out of reach without rungs the data marks unsafe.
 
-## 8. Verification checklist for implementation (updated)
+## 8. Verification checklist (all Phase-1 items verified 2026-07-15)
 
 Measured/validated by round 2:
 
@@ -333,20 +348,27 @@ Measured/validated by round 2:
 - [x] Trial-level mean-of-partials ranks correctly for equal-weight
       multi-test trials (liver replay).
 
-Still to verify at Phase-1 implementation time (Optuna 4.9 pinned):
+Verified by round 3 (Optuna 4.9 pinned; `tests/test_pruning.py` +
+`tests/test_e2e_prune_trunk.py`):
 
-- [ ] `trial.report(value, step)` + `study.tell(trial, state=PRUNED)` from
-      ask/tell records intermediate values retrievable by samplers.
-- [ ] `CmaEsSampler(consider_pruned_trials=True)` uses the *last* intermediate
-      value of PRUNED trials (and stays harmless for pruned trials that have
-      none — today's timeout prunes).
-- [ ] `trial.should_prune()` under ask/tell for the `"asha"`/`"median"` rules.
-- [ ] Closed-loop e2e (Gate 2): trunk_control campaign with
-      `prune_mode="kill"` at the §7-calibrated rungs vs `"off"` at equal
-      trial budget — assert step savings in the measured band, best-score
-      parity within noise, no orphan processes, PRUNED trials with
-      intermediate values in the study, and `"shadow"` kills nothing while
-      logging decisions.
+- [x] `trial.report(value, step)` + `study.tell(trial, state=PRUNED)` under
+      ask/tell records intermediate values
+      (`test_pruned_trial_carries_partial_as_intermediate_value`).
+- [x] `CmaEsSampler(consider_pruned_trials=True)` keeps sampling correctly
+      across generations containing PRUNED trials with intermediate values
+      (tripwire `test_cmaes_keeps_asking_with_pruned_intermediate_values`;
+      trials pruned without values — today's timeout prunes — unaffected).
+- [x] **Closed-loop equal-budget e2e (Gate 2)**: two trunk campaigns, shadow
+      vs kill, seeded Sobol' startup asking identical params in both arms
+      (bit-deterministic scene ⇒ the shadow arm is ground truth for every
+      trial the kill arm terminated). Measured: 4 trials killed, **35% of
+      startup-generation steps saved**, no generation winner killed,
+      best-score parity exact, every PRUNED study trial carrying its rung
+      partial as an intermediate value, shadow arm killing nothing while
+      marking would-kills. Runtime ~103 s — merge-tier, and the permanent
+      regression gate for the pruning/finalize machinery.
+- [ ] `trial.should_prune()` under ask/tell — deferred with the
+      `"asha"`/`"median"` rules for TPE/GP (not in v1).
 
 ## 9. Rejected alternatives (round 1, still standing)
 
