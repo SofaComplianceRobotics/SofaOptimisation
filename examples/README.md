@@ -1,10 +1,15 @@
 # sofaopt examples — the validation ladder
 
-Five examples, ordered by cost. Each rung adds exactly one new demand on the
-framework, so a regression shows up at the cheapest rung that exercises it.
-Every objective is a **measured target with recorded provenance** (never a
-guessed number), and every scene **self-stops** (settle detection or a fixed
-observation horizon) — no wasted steps.
+Two groups. The **regression ladder** (top table) is six examples ordered by
+cost, each adding exactly one new demand on the framework, so a regression
+shows up at the cheapest rung that exercises it. The **study platforms** (second
+table) are two deliberately harder 8-parameter examples for in-depth optimizer
+research rather than quick regression. Every objective is a **measured target
+with recorded provenance** (never a guessed number), and every scene
+**self-stops** (settle detection or a fixed observation horizon) — no wasted
+steps.
+
+## Regression ladder
 
 | example | source | scenario | params | first to validate | ~trial |
 |---|---|---|---|---|---|
@@ -20,6 +25,21 @@ tiers carry (E, load) identifiability *ridges* (exact on the liver), the
 finger a redundant control/material/design triple, the caduceus a
 discontinuous slide-off basin — between them they cover the geometries an
 optimizer meets in practice.
+
+## Study platforms (8 params, for in-depth research)
+
+| example | source | scenario | params | studies | ~trial |
+|---|---|---|---|---|---|
+| [`liver_elastography`](liver_elastography/) | `Demos/liver.scn` + regional field | **identification**: localize a soft lesion in a 6-region stiffness field, 3 load cases | 6 regional E + ν + density | graded sensitivity, load-case-count vs identifiability, sensitivity-tooling ground truth | ~1 s ×3 |
+| [`trunk_control`](trunk_control/) | SoftRobots Trunk tutorial | **control allocation**: 8 cables shape a soft continuum to a target backbone | 8 cable displacements | redundancy + antagonism, non-convex control landscape, restart/covariance value | ~3 s |
+
+The two platforms are complementary halves of the hard 8-D regime:
+identification (a hidden parameter field to recover, with an active E/ρ ridge
+that makes lesion localization genuinely ambiguous — a measured 40-generation
+run mislocated the lesion to the adjacent region while scoring 91) vs control
+(a redundant, antagonistic actuator map with many equivalent optima). They are
+where optimizer features actually differentiate, on real SOFA scenes cheap
+enough for repeated-seed studies.
 
 Each example directory has a README with the parameter table, measured
 anchors + provenance, the regeneration recipe for its target, and the
