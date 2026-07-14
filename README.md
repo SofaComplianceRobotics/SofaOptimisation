@@ -214,6 +214,7 @@ When to run what:
 | any commit touching Python | `ruff check` clean + `pytest` (e2e auto-skips without SOFA) |
 | changes to the trial contract (runner, scoring, trial_state, archiving) | `pytest` on a machine with SOFA, so the e2e actually executes |
 | before a merge / PR / release | full suite with the e2e executing |
+| changes to the pruning or finalize machinery | additionally `tests/test_e2e_prune_trunk.py` (~2 min: two full trunk campaigns, shadow vs kill at equal budget) |
 
 ## Documentation
 

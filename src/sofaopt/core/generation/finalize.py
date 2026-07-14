@@ -17,6 +17,7 @@ import optuna
 from sofaopt.core.algorithm import _finalize_trial_score, _read_run_results
 from sofaopt.core.generation.launch import _relaunch_run, defer_race_run
 from sofaopt.core.generation.plan import prune_trial, trial_has_ungated_positive_run
+from sofaopt.core.generation.pruning import GenerationPruner, build_pruner
 from sofaopt.core.generation.racing import deferred_by_racing, evaluate_race
 from sofaopt.core.generation.types import LaunchedTrial, LaunchResult, RunHistory
 from sofaopt.core.runconfig import RunConfig
@@ -51,6 +52,7 @@ def finalize_generation(
         gen_dir=gen_dir,
         trial_state_paths_by_trial=trial_state_paths_by_trial,
         launch=launch_result,
+        pruner=build_pruner(cfg, gen_index, launch_result.trials),
     )
     try:
         finalizer.run()
@@ -69,6 +71,7 @@ class _GenerationFinalizer:
     gen_dir: Path
     trial_state_paths_by_trial: list[Path]
     launch: LaunchResult
+    pruner: GenerationPruner | None = None
 
     finalized: set[int] = field(default_factory=set)
     gen_scores: list[float] = field(default_factory=list)
@@ -95,6 +98,8 @@ class _GenerationFinalizer:
 
     def _settle_pass(self) -> None:
         """One non-blocking sweep over the not-yet-finalized trials."""
+        if self.pruner is not None:
+            self.pruner.check()
         for entry in self.launch.trials:
             if entry.trial_index in self.finalized:
                 continue

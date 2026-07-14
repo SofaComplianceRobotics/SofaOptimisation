@@ -88,6 +88,26 @@ Key properties:
   to debug), `trial.params == {}` and `trial.is_optimizing == False`, so guard
   scoring with `if trial.is_optimizing:` and your scene still runs interactively.
 
+### Optional: an anytime score for multi-fidelity pruning
+
+If the test opts into step pruning (`TestSpec.prunable`, with a calibrated
+`prune_rungs` schedule and the project's `prune_mode`), the scene must
+periodically report the score the run *would receive if it ended now* —
+`trial.report_progress(score, frame, total)` bundles it with the progress
+write above (it lands as `partial_score` in the run status):
+
+```python
+        if self.step % 5 == 0:                     # modest cadence is enough
+            trial.report_progress(self.score_so_far(), self.step, self.horizon)
+```
+
+Observation only — computing it must never feed back into the physics. At
+each rung the optimizer ranks the generation's candidates by this value and
+stops the hopeless bottom early (`"shadow"` mode first: it only logs the
+would-kill decisions). Calibrate rung steps from a trace-replay study, not by
+guessing — see `examples/prefix_pruning_study/` and
+`docs/design/multi-fidelity.md`.
+
 ### What the scene receives (env, set automatically)
 
 | `trial.` field | from env key | meaning |

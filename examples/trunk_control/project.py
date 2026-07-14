@@ -56,6 +56,12 @@ PROJECT = SofaOptProject(
             description="ramp 8 cables, match the target backbone curve",
             max_score=100.0,
             default_selected=True,
+            # Step-pruning calibration, MEASURED 2026-07-15 via trace replay
+            # (examples/prefix_pruning_study, 16 gens x 8 trials): staged
+            # 8->6->4 at steps 117/257 = 28% steps saved, 0 winner kills,
+            # ~2 mid-rank regrets. Inert until the project sets prune_mode.
+            prunable=True,
+            prune_rungs=((117, 0.75), (257, 0.5)),
         )
     ],
     runsofa_exe=Path(os.environ.get("RUNSOFA_EXE", "runSofa")),
