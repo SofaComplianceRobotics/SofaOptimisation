@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -32,7 +33,7 @@ def _start_proc(name: str, script: Path, env: dict | None = None) -> str:
         return "No run_script configured on the project (dashboard is read-only)."
     try:
         log_path = _log_dir() / f"{name}.log"
-        log_file = open(log_path, "w", encoding="utf-8")
+        log_file = open(log_path, "w", encoding="utf-8")  # noqa: SIM115  # handle feeds the child process and must outlive this function
         run_env = env if env is not None else os.environ.copy()
         run_env["PYTHONIOENCODING"] = "utf-8"
         python_exe = context.project().run_python_exe
@@ -52,11 +53,14 @@ def _start_proc(name: str, script: Path, env: dict | None = None) -> str:
 
 
 def _stop_proc(name: str) -> str:
+    from sofaopt.core.sofa_runner import kill_process_tree
+
     proc = _PROCS.get(name)
     if proc is None or proc.poll() is not None:
         return "Not running."
     try:
-        proc.kill()
+        kill_process_tree(proc)
+        proc.wait(timeout=10)
         _PROCS[name] = None
         return "Stopped."
     except Exception as exc:
@@ -75,17 +79,59 @@ def _read_proc_log(name: str, tail: int = 150) -> str:
 
 
 def start_optimize(env: dict | None = None) -> str:
-    """Launch the project's headless optimization run."""
+    """Launch the project's headless optimization run (auto-resumes a study)."""
+    if not _proc_running("optimize"):
+        # A run started OUTSIDE the dashboard (CLI/script) holds the run lock;
+        # launching a second orchestrator on the same study corrupts both.
+        from sofaopt.core.runlock import lock_holder
+
+        pid = lock_holder(context.project().runtime_dir)
+        if pid:
+            return (
+                f"An optimization for this study is already running outside the "
+                f"dashboard (PID {pid}) — stop it first."
+            )
     return _start_proc("optimize", context.project().run_script, env)
 
 
 def stop_optimize() -> str:
-    return _stop_proc("optimize")
+    """Stop the run — this is a PAUSE: the study resumes from the last
+    completed generation, and interrupted trials are re-enqueued."""
+    msg = _stop_proc("optimize")
+    if msg == "Stopped.":
+        return ("Paused — Resume continues from the last completed generation "
+                "(interrupted trials are re-enqueued).")
+    return msg
+
+
+def optimize_running() -> bool:
+    """True while the dashboard-launched optimization process is alive."""
+    return _proc_running("optimize")
+
+
+def stop_optimize_and_wait(timeout_s: float = 15.0) -> bool:
+    """Stop the run and WAIT for the process to exit (for stop-&-archive:
+    the runtime dir must not be moved under a live process). True when gone."""
+    from sofaopt.core.sofa_runner import kill_process_tree
+
+    proc = _PROCS.get("optimize")
+    if proc is None or proc.poll() is not None:
+        return True
+    # Best-effort stop; the poll() below decides the outcome either way.
+    with contextlib.suppress(Exception):
+        kill_process_tree(proc)
+        proc.wait(timeout=timeout_s)
+    if proc.poll() is not None:
+        _PROCS["optimize"] = None
+        return True
+    return False
 
 
 def launch_scene(scene_file: Path, extra_env: dict | None = None, gui: str = "imgui") -> str:
     """Launch one scene in an interactive ``runSofa`` window for viewing."""
     project = context.project()
+    if project.runsofa_exe is None:
+        return "runSofa not configured (set RUNSOFA_EXE or add runsofa_exe to the project)."
     runsofa = str(project.runsofa_exe)
     if not os.path.isfile(runsofa):
         return f"runSofa not found at: {runsofa}"
@@ -97,7 +143,13 @@ def launch_scene(scene_file: Path, extra_env: dict | None = None, gui: str = "im
         cmd += ["-l", plugin]
     cmd += ["-g", gui, str(scene_file)]
     try:
+        from sofaopt.core.sofa_runner import attach_process_to_sofa_job
+
         proc = subprocess.Popen(cmd, env=env, cwd=str(project.work_dir))
+        # Viewer windows must not outlive the dashboard (kill-on-close job).
+        # The headless optimize run is intentionally NOT attached: a long run
+        # must survive closing the dashboard; it owns its own job for children.
+        attach_process_to_sofa_job(proc)
         return f"Launched SOFA (PID {proc.pid})."
     except Exception as exc:
         return f"Failed to launch: {exc}"

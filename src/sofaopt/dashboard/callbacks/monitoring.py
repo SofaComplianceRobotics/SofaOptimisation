@@ -1,4 +1,4 @@
-"""Callbacks for the Performance, Progress and Bounds tabs."""
+"""Callbacks for the Performance, Progress, Bounds and Pareto tabs."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from sofaopt.dashboard.data.cache import (
     _read_json,
 )
 from sofaopt.dashboard.plotting.bounds import _build_param_bounds_graph
+from sofaopt.dashboard.plotting.pareto import build_pareto_layout
 from sofaopt.dashboard.plotting.performance import (
     _build_leaderboard_html,
     _build_performance_graph,
@@ -24,7 +25,23 @@ from sofaopt.dashboard.ui.progress import (
 )
 
 
-def register_monitoring_callbacks(app) -> None:
+def register_pareto_callbacks(app) -> None:
+    """Register Pareto front tab callback (only wired when multi_objective=True)."""
+
+    @app.callback(
+        Output("pareto-graphs", "children"),
+        Input("pareto-interval", "n_intervals"),
+    )
+    def update_pareto(_):
+        project = context.project()
+        test_names = [t.name for t in project.tests]
+        directions = [t.direction for t in project.tests]
+        records, _ = _load_data()
+        done = [r for r in records if str(r.get("state", "")).lower() == "done"]
+        return build_pareto_layout(done, test_names, directions)
+
+
+def register_monitoring_callbacks(app) -> None:  # noqa: C901  # Dash registrar: total is the sum of its small nested callbacks; the flat registration list reads best in one place
     """Register performance graph, progress grid, bounds, and jump controls."""
 
     @app.callback(
@@ -146,12 +163,6 @@ def register_monitoring_callbacks(app) -> None:
         Output("jump-auto-enabled", "data", allow_duplicate=True),
         Input("jump-top-button", "n_clicks"),
         prevent_initial_call=True,
-    )
-
-    app.clientside_callback(
-        "function(n) { return window.dash_clientside.no_update; }",
-        Output("jump-top-output", "children"),
-        Input("jump-top-button", "n_clicks"),
     )
 
     app.clientside_callback(

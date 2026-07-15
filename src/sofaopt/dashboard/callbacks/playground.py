@@ -238,7 +238,7 @@ def _run_outputs(runs: list[dict]):
     return options, new_idx, max_frame
 
 
-def register_playground_callbacks(app) -> None:
+def register_playground_callbacks(app) -> None:  # noqa: C901  # Dash registrar: total is the sum of its small nested callbacks; the flat registration list reads best in one place
     """Register all Playground-tab callbacks."""
 
     # Show only the hyperparameter rows relevant to the chosen algorithm.
@@ -290,7 +290,7 @@ def register_playground_callbacks(app) -> None:
         prevent_initial_call=True,
     )
     def regen_map(_submit, mode, n_optima, spread, dim):
-        seed = random.randrange(1_000_000)
+        seed = random.randrange(1_000_000)  # noqa: S311  # toy-landscape seed, not security
         dim = max(1, int(dim or 2))
         peaks = make_landscape(mode, int(n_optima or 1), float(spread or 0.0),
                                seed=seed, dim=dim)
@@ -342,7 +342,8 @@ def register_playground_callbacks(app) -> None:
         peaks = map_data["peaks"]
         dim = int(map_data.get("dim", 2))
         hp = _read_hp(resolution, n_startup, sigma0, popsize, lr)
-        fn = lambda p: score_at(peaks, p)
+        def fn(p):
+            return score_at(peaks, p)
         runs = [run_optimization(algo, hp, fn, int(budget or 60), int(seed or 0), dim=dim)
                 for algo in ALGO_ORDER]
         options, new_idx, max_frame = _run_outputs(runs)

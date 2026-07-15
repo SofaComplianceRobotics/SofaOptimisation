@@ -1,10 +1,13 @@
 """Short-lived caching of trial records and generation summaries."""
 
+import logging
 import json
 import time
 from pathlib import Path
 
 from sofaopt.dashboard import context
+
+logger = logging.getLogger(__name__)
 
 _DATA_CACHE: dict = {"records": [], "summaries": [], "last_load": 0.0}
 
@@ -47,7 +50,7 @@ def _load_data():
         _DATA_CACHE["last_load"] = now
         return records, summaries
     except Exception as exc:
-        print(f"[warn] Error loading data: {exc}")
+        logger.warning(f"[warn] Error loading data: {exc}")
         return (
             _DATA_CACHE.get("records", []) or [],
             _DATA_CACHE.get("summaries", []) or [],

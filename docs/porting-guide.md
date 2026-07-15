@@ -2,7 +2,9 @@
 
 This guide takes you from an existing SOFA scene to a fully optimized,
 dashboard-driven project. You bring the simulation and the score; sofaopt
-brings CMA-ES, parallel execution, aggregation, gating, and the web UI.
+brings the samplers (CMA-ES, GP-BO, TPE, NSGA-II), parallel execution,
+aggregation, gating, and the web UI. Once your project runs, the
+[optimization guide](optimization-guide.md) covers making the search *good*.
 
 
 ---
@@ -93,8 +95,15 @@ Key properties:
 | `params` | `OPT_PARAMS_PATH` (a `params.json`) | this trial's sampled values |
 | `run_slot` | `OPT_RUN_SLOT` | which slot to write the score into |
 | `test_name` | `OPT_TEST_NAME` | which test is running |
+| `test_run_index`/`test_run_total` | `OPT_TEST_RUN_INDEX`/`OPT_TEST_RUN_TOTAL` | repeat i of N for this test |
 | `gen`/`trial`/`run` | `OPT_GEN`/`OPT_TRIAL`/`OPT_RUN` | identifiers |
+| `trial_state_path` | `OPT_TRIAL_STATE_PATH` | where scores are written; absent ⇒ `is_optimizing == False` |
 | `env["..."]` | prepare-hook env | e.g. `OPT_MESH` |
+
+The full key list (including the Python-runner recording keys
+`OPT_SOFA_PLUGINS` / `OPT_RECORD_*` and the dashboard override keys) lives in
+one place: [`src/sofaopt/core/envkeys.py`](../src/sofaopt/core/envkeys.py).
+Always import from there instead of retyping string literals.
 
 ---
 
@@ -147,8 +156,10 @@ PROJECT = SofaOptProject(
 - `scene_file` is launched via `runSofa`.
 - `run_count` — how many times to run this test per trial (e.g. several
   randomized scenarios). `score_aggregation` is how those repeats are combined
-  into the test's score: `"mean"` (default), `"median"`, or `"sum"`. Both are
-  fields on the `TestSpec`:
+  into the test's score: `"mean"` (default), `"median"`, `"sum"`, or
+  `"exponential_coverage"` (sum × 1.5 per additional *positive* repeat —
+  rewards candidates that succeed across many scenarios rather than excelling
+  in one). Both are fields on the `TestSpec`:
 
   ```python
   TestSpec("reach", scene_file=..., run_count=3, score_aggregation="mean", max_score=100)
@@ -157,6 +168,23 @@ PROJECT = SofaOptProject(
 - `max_score` normalizes the test to `[0,1]`; `weight` combines tests.
 - `gated=True`: only run this test once an *ungated* test has
   scored above zero for the candidate.
+
+### How scores combine (exact order)
+
+Per trial the pipeline is, in this order and nowhere else:
+
+1. each test's repeat scores → one per-test aggregate via `score_aggregation`;
+2. per-test aggregate → normalized by `max_score`, clamped at 1.0;
+3. normalized tests → combined by `weight`, renormalized over the tests
+   actually counted (a gated test that never unlocked is excluded);
+4. the result (0–100) is the study objective and is recorded in
+   `trial_state.json` (`final_score`) — the dashboard/videos read it verbatim.
+
+Failure semantics: prepare-hook exceptions and all-runs-crashed report
+`hard_fail_score` (default −3.0) to the sampler as a *real* observation;
+`sofa_realtime_timeout` kills report the trial as *pruned* (a wedge, not bad
+parameters). Crashed repeats among successful ones count as 0.0 within their
+test rather than failing the trial.
 
 ---
 
@@ -209,103 +237,40 @@ cross-parameter relationships before use) and
 
 ---
 
-## 6. Tuning the search (CMA-ES)
+## 6. Tuning the search
 
-How thoroughly and how fast the optimizer searches is controlled entirely by a
-few fields on `SofaOptProject`. You set them when you build the project:
+How thoroughly and how fast the optimizer searches is controlled entirely by
+fields on `SofaOptProject`:
 
 ```python
 PROJECT = SofaOptProject(
     ...,
+    sampler="cmaes",          # or "gp", "tpe", "random"; multi_objective=True for NSGA-II
     n_parallel=6,             # population size  (also = concurrent runSofa procs)
-    n_generations=120,        # how many CMA-ES update steps
-    cmaes_startup_trials=24,  # random trials before CMA-ES takes over
-    cmaes_sigma0=0.3,         # initial search spread
+    n_generations=120,        # how many optimizer update steps
+    cmaes_sigma0=0.3,         # initial search spread (CMA-ES)
+    seed_sampler="sobol",     # space-filling startup design
     max_active_sofa_procs=12, # hard cap on concurrent SOFA processes
 )
 ```
 
-### The budget — how many simulations you're committing to
+The essentials:
 
-```
-trials evaluated      = n_parallel × n_generations
-runSofa launches      = trials × Σ(run_count over selected tests)
-```
+- **The budget** is `n_parallel × n_generations` trials, times
+  `Σ run_count` SOFA launches per trial — size `n_generations` to the time you
+  actually have.
+- **CMA-ES starts at your `ParamSpec` defaults** (`x0`), so set them to your
+  best-known design. Frozen params (`min == max`) are excluded from the search.
+- `n_parallel` must be **≥ 4** for CMA-ES (enforced).
+- Before the model-based sampler engages, a **startup phase** of
+  `cmaes_startup_trials` space-filling trials explores the space — `None`
+  (default) auto-sizes it from the searched dimensionality.
 
-So 6 × 120 = 720 candidates; if your one test has `run_count=3`, that's ~2160
-`runSofa` runs. Multiply by a typical scene's wall-time to estimate the run, and
-size `n_generations` to the time you actually have.
-
-### `n_parallel` — population size (λ)
-
-The number of candidates CMA-ES draws **per generation**, launched concurrently
-as separate `runSofa` processes. Two effects:
-
-- **Search quality:** CMA-ES estimates its next step from a whole population, so
-  bigger populations give a steadier, more robust update (better on noisy or
-  rugged landscapes) — at the cost of more simulations per generation.
-- **Parallelism:** it's also how many scenes run at once. Match it to the CPU
-  cores you can spare. Must be **≥ 4** (the framework enforces this — CMA-ES is
-  ill-defined below that).
-
-### `n_generations` — how long it refines
-
-The number of CMA-ES update steps. More generations = more refinement of the
-distribution toward good regions. This is your main "search longer" dial.
-
-### Where it starts — `x0` (your `ParamSpec` defaults)
-
-CMA-ES does **not** start from a random point: its initial mean is each
-parameter's `default`. So **set your defaults to your best-known / baseline
-design** and the search begins there and improves outward. Frozen params
-(`min == max`) are held fixed and excluded from the search.
-
-### `cmaes_startup_trials` — the random startup phase
-
-The **first `cmaes_startup_trials` completed trials are sampled uniformly at
-random** within each parameter's bounds; only afterwards does the CMA-ES
-algorithm take over. CMA-ES needs a handful of evaluated points before its
-covariance estimate means anything — this warm-up provides them.
-
-- It's effectively *"how many random trials first."* Because a generation is
-  `n_parallel` trials, setting it to `K × n_parallel` gives roughly **K fully
-  random generations** before CMA-ES engages.
-- **Rule of thumb:** at least one population (`≥ n_parallel`); a small multiple
-  (2–4×) for rugged or higher-dimensional problems. The framework default of
-  **50** suits a real project with many parameters; a 2-parameter toy is fine
-  with ~8.
-- Bigger = more upfront exploration (less likely to commit early to a poor
-  basin); smaller = converges sooner.
-
-### `cmaes_sigma0` — initial spread
-
-The initial standard deviation of the search distribution, in Optuna's
-internally-normalized parameter space (each range mapped to ~`[0, 1]`). So:
-
-- `1.0` (default) is **broad** — the first CMA-ES samples spread across most of
-  each parameter's range.
-- `0.2–0.3` starts **local**, clustered near your defaults (`x0`) — good when
-  you trust the baseline and want refinement rather than a global hunt.
-
-As the search proceeds CMA-ES adapts this spread automatically; `sigma0` only
-sets the starting width.
-
-### `max_active_sofa_procs` — concurrency safety cap
-
-Distinct from `n_parallel`: a single trial can launch several runs (multiple
-tests / repeats), so the number of *in-flight* SOFA processes can exceed the
-population. This caps the total concurrently, throttling new launches until
-others finish. Set it to roughly your core count (default 12).
-
-### Recipes
-
-- **Quick smoke test:** `n_parallel=4, n_generations=8, cmaes_startup_trials=8`.
-- **Real run:** `n_parallel=`cores-you-can-spare, `n_generations=100+`,
-  `cmaes_startup_trials=50`, `cmaes_sigma0=1.0`.
-- **Trust your baseline, want refinement:** keep defaults sharp, lower
-  `cmaes_sigma0` to ~`0.2` and `cmaes_startup_trials` to ~`n_parallel`.
-- **Rugged / many parameters:** raise `cmaes_startup_trials` and keep
-  `cmaes_sigma0` near `1.0` for wider exploration.
+Everything deeper — which sampler fits which problem (CMA-ES vs GP-BO vs TPE vs
+NSGA-II), the Sobol' startup design, `cmaes_sigma0` intuition, handling noisy
+scores (`run_count`/`score_aggregation`), duplicate caching, early stopping,
+and ready-made recipes — lives in the
+**[optimization guide](optimization-guide.md)**.
 
 ---
 
@@ -330,6 +295,16 @@ launch_dashboard(PROJECT, port=8050)
 
 Artifacts land under `work_dir/runtime/` (`trials/gen_XXXX/trial_YY/…`,
 `study.db`, `trials/progress.json`).
+
+**Archiving.** Starting a **fresh** run (no existing `study.db` to resume) no
+longer wipes `runtime/` — it *moves* it to `work_dir/archives/<timestamp>_auto/`
+first, so a new run can never destroy a previous one. Archive explicitly with
+`sofaopt.archive_run(PROJECT, name=..., notes=...)` or the dashboard's
+**Archives** tab, which also restores/deletes archives and compares runs
+(overlaid best-so-far curves + best-params diff). Restoring moves the archive
+back to `runtime/` — its `study.db` is intact, so the restored run can be
+resumed. Delete `work_dir/archives/` entries you don't need; they are plain
+directories.
 
 ---
 

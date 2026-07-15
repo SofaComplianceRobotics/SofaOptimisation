@@ -22,6 +22,7 @@ same scene file still works for interactive debugging.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -30,6 +31,8 @@ from pathlib import Path
 from typing import Any
 
 from sofaopt.core import envkeys
+from sofaopt.core.io import update_json_locked
+from sofaopt.core.trial_state import patch_run_slot
 
 
 @dataclass
@@ -58,13 +61,24 @@ class Trial:
         return {"gen": self.gen, "trial": self.trial, "run": self.run}
 
     def attach(self, rootnode) -> "Trial":
-        """Bind a SOFA root so writes timestamp with sim time and can stop it."""
-        self._writer = ScoreWriter(
-            rootnode,
-            run_info=self.run_info,
-            trial_state_path=self.trial_state_path,
-            run_slot=self.run_slot,
-        )
+        """Bind a SOFA root so writes timestamp with sim time and can stop it.
+
+        Keeps an existing writer (a scene may score before attaching): the root
+        is bound onto it, and if it already scored the scene is stopped now —
+        replacing the writer here used to discard that state and leave a
+        non-optimizing run (e.g. a video re-render) animating forever.
+        """
+        if self._writer is None:
+            self._writer = ScoreWriter(
+                rootnode,
+                run_info=self.run_info,
+                trial_state_path=self.trial_state_path,
+                run_slot=self.run_slot,
+            )
+        else:
+            self._writer.rootnode = rootnode
+            if self._writer.finished:
+                self._writer._stop()
         return self
 
     def _ensure_writer(self) -> "ScoreWriter":
@@ -208,69 +222,22 @@ class ScoreWriter:
 
     def _now(self) -> float:
         if self.rootnode is not None:
-            try:
+            # Fall through to wall clock when the scene has no readable time.
+            with contextlib.suppress(Exception):
                 return float(self.rootnode.time.value)
-            except Exception:
-                pass
         return time.time()
-
-    def _acquire_lock(self, lock_path: Path, timeout_s: float = 5.0) -> bool:
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
-            try:
-                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.close(fd)
-                return True
-            except FileExistsError:
-                time.sleep(0.01)
-            except Exception:
-                return False
-        return False
-
-    def _release_lock(self, lock_path: Path) -> None:
-        try:
-            if lock_path.exists():
-                lock_path.unlink()
-        except Exception:
-            pass
 
     def _update_trial_state_run(self, payload: dict[str, Any]) -> bool:
         if self.trial_state_path is None:
             return False
         path = Path(self.trial_state_path)
-        lock_path = path.with_suffix(path.suffix + ".lock")
-        if not self._acquire_lock(lock_path):
-            return False
-        try:
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if not isinstance(data, dict):
-                    data = {}
-            except Exception:
-                data = {}
-
-            runs = data.get("runs")
-            if not isinstance(runs, list):
-                runs = []
-            while len(runs) < self.run_slot:
-                runs.append({"run": len(runs) + 1})
-
-            slot = runs[self.run_slot - 1]
-            if not isinstance(slot, dict):
-                slot = {"run": self.run_slot}
-            slot.update(payload)
-            slot["run"] = self.run_slot
-            slot["updated_at"] = self._now()
-            runs[self.run_slot - 1] = slot
-
-            data["runs"] = runs
-            data["updated_at"] = self._now()
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            tmp.replace(path)
-            return True
-        finally:
-            self._release_lock(lock_path)
+        # run_slot is 1-based; clamp for standalone runs (runSofa GUI) where OPT_RUN_SLOT is unset (0)
+        slot_no = self.run_slot if self.run_slot >= 1 else 1
+        update_json_locked(
+            path,
+            lambda data: patch_run_slot(data, slot_no, payload, now=self._now()),
+        )
+        return True
 
     def write_status(self, payload: dict[str, Any], *, min_interval: float = 0.0) -> None:
         """Best-effort live-status write (errors swallowed so they never kill the sim)."""
@@ -311,10 +278,9 @@ class ScoreWriter:
 
     def _stop(self) -> None:
         if self.rootnode is not None:
-            try:
+            # Best-effort pause; the kill below is what actually stops the run.
+            with contextlib.suppress(Exception):
                 self.rootnode.animate = False
-            except Exception:
-                pass
         # Only hard-kill under the optimizer; an interactive (hand-launched)
         # run has no trial_state_path and should just pause, not exit.
         if self.trial_state_path is not None:
@@ -325,4 +291,4 @@ class ScoreWriter:
         return self._finished
 
 
-__all__ = ["Trial", "open_trial", "ScoreWriter"]
+__all__ = ["ScoreWriter", "Trial", "open_trial"]

@@ -1,7 +1,8 @@
-"""Optimise tab — test selection, weight management, Run/Stop."""
+"""Optimise tab — test selection, weight management, sampler choice, Run/Stop."""
 
 from dash import dcc, html
 
+from sofaopt.dashboard import context
 from .styles import LOG_STYLE
 
 PIE_PALETTE = [
@@ -23,6 +24,94 @@ def _equal_split(n: int) -> list[int]:
     base = 100 // n
     rem = 100 - base * n
     return [base + (1 if i < rem else 0) for i in range(n)]
+
+
+def _build_sampler_controls() -> html.Div:
+    """Optimizer-settings row: sampler, initial design, margin, parallelism.
+
+    Defaults are read from the project; the values are forwarded as ``OPT_*``
+    env overrides when the Run button launches the headless study, so the UI
+    drives the same knobs as the ``run.py`` CLI flags.
+    """
+    project = context.project()
+    return html.Div(
+        [
+            html.H5("Optimizer", className="mb-2"),
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Label("Sampler", className="form-label mb-1 small text-muted"),
+                            dcc.Dropdown(
+                                id="opt-sampler",
+                                options=[
+                                    {"label": "CMA-ES (covariance, coupled params)", "value": "cmaes"},
+                                    {"label": "GP-BO (sample-efficient, expensive sims)", "value": "gp"},
+                                    {"label": "TPE (Bayesian)", "value": "tpe"},
+                                    {"label": "Random (baseline)", "value": "random"},
+                                ],
+                                value=project.sampler,
+                                clearable=False,
+                            ),
+                        ],
+                        className="col-12 col-md-4",
+                    ),
+                    html.Div(
+                        [
+                            html.Label("Initial design", className="form-label mb-1 small text-muted"),
+                            dcc.Dropdown(
+                                id="opt-seed-sampler",
+                                options=[
+                                    {"label": "Sobol' (space-filling DOE)", "value": "sobol"},
+                                    {"label": "Random", "value": "random"},
+                                ],
+                                value=project.seed_sampler,
+                                clearable=False,
+                            ),
+                        ],
+                        className="col-12 col-md-3",
+                    ),
+                    html.Div(
+                        [
+                            html.Label("Parallel / Gens", className="form-label mb-1 small text-muted"),
+                            html.Div(
+                                [
+                                    dcc.Input(
+                                        id="opt-n-parallel", type="number", min=1, step=1,
+                                        value=project.n_parallel, className="form-control form-control-sm",
+                                        style={"width": "80px"},
+                                    ),
+                                    dcc.Input(
+                                        id="opt-n-generations", type="number", min=1, step=1,
+                                        value=project.n_generations, className="form-control form-control-sm ms-2",
+                                        style={"width": "80px"},
+                                    ),
+                                ],
+                                className="d-flex",
+                            ),
+                        ],
+                        className="col-12 col-md-3",
+                    ),
+                    html.Div(
+                        dcc.Checklist(
+                            id="opt-cmaes-margin",
+                            options=[{"label": " CMA-ES with Margin", "value": "margin"}],
+                            value=["margin"] if project.cmaes_with_margin else [],
+                            className="mt-4",
+                        ),
+                        className="col-12 col-md-2",
+                    ),
+                ],
+                className="row g-2 align-items-start",
+            ),
+            html.Small(
+                "GP-BO is most sample-efficient with a small batch — try Parallel ≈ 4. "
+                "Margin only applies to CMA-ES and fixes low-cardinality integer stagnation.",
+                className="text-muted",
+            ),
+        ],
+        className="mb-3 p-3 border rounded bg-light",
+    )
 
 
 def build_optimise_tab(catalog: dict) -> html.Div:
@@ -85,6 +174,7 @@ def build_optimise_tab(catalog: dict) -> html.Div:
     return html.Div(
         [
             html.H3("Optimisation", className="mb-2"),
+            _build_sampler_controls(),
             dcc.Store(id="opt-weights-store", data=initial_store),
             html.Div(
                 [
@@ -114,7 +204,7 @@ def build_optimise_tab(catalog: dict) -> html.Div:
             html.Div(
                 [
                     html.Button("Start Optimisation", id="opt-start-btn", n_clicks=0, className="btn btn-success me-2"),
-                    html.Button("Stop", id="opt-stop-btn", n_clicks=0, className="btn btn-danger"),
+                    html.Button("Pause", id="opt-stop-btn", n_clicks=0, disabled=True, className="btn btn-danger"),
                 ],
                 className="mb-3",
             ),

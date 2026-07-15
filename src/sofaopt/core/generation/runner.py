@@ -9,8 +9,8 @@ import optuna
 from sofaopt.core.generation.finalize import finalize_generation
 from sofaopt.core.generation.launch import launch_generation_trials
 from sofaopt.core.generation.progress import generation_progress_writer
+from sofaopt.core.generation.types import RunHistory
 from sofaopt.core.runconfig import RunConfig
-from sofaopt.core.state import TrialState
 from sofaopt.core.trial_state import init_trial_state
 
 
@@ -20,8 +20,9 @@ def run_generation(
     trials: list,
     study: optuna.Study,
     env: dict,
-    state: TrialState,
+    state: RunHistory,
     started_at: float = 0.0,
+    total_gens: int | None = None,
 ) -> None:
     """Run one CMA-ES generation end to end."""
     project = cfg.project
@@ -49,7 +50,7 @@ def run_generation(
     progress_stop = threading.Event()
     progress_thread = threading.Thread(
         target=generation_progress_writer,
-        args=(cfg, gen_index, trial_state_paths_by_trial, state.all_scores, progress_stop, started_at),
+        args=(cfg, gen_index, trial_state_paths_by_trial, state.all_scores, progress_stop, started_at, total_gens),
         daemon=True,
     )
     progress_thread.start()

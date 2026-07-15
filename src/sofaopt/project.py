@@ -117,7 +117,9 @@ class TestSpec:
             ``max_run_relaunches`` (which must be > 0). Leave False for ordinary
             one-shot scenes.
         score_aggregation: How ``run_count`` repeats are combined into this
-            test's score: ``"mean"`` (default), ``"median"``, or ``"sum"``.
+            test's score: ``"mean"`` (default), ``"median"``, ``"sum"``, or
+            ``"exponential_coverage"`` (sum × 1.5 per additional positive
+            repeat — rewards covering many scenarios).
         default_selected: Whether the dashboard pre-selects this test.
     """
 
@@ -128,6 +130,7 @@ class TestSpec:
     run_count: int = 1
     max_score: float = 1.0
     weight: float = 1.0
+    direction: Literal["maximize", "minimize"] = "maximize"
     gated: bool = False
     relaunchable: bool = False
     score_aggregation: str = "mean"
@@ -184,7 +187,9 @@ class SofaOptProject:
     tests: Sequence[TestSpec]
 
     # --- how to reach SOFA (works with ANY build that ships SofaPython3) ---
-    runsofa_exe: Path
+    runsofa_exe: Path | None = None
+    """Path to the runSofa executable. Required when runner="runsofa" (the
+    default); not needed when runner="python"."""
     sofa_plugins: Sequence[str] = ("SofaPython3",)
     sofa_env: Mapping[str, str] = field(default_factory=dict)
     """Extra environment for scene subprocesses (e.g. ``SOFA_ROOT``,
@@ -193,6 +198,11 @@ class SofaOptProject:
     gui_mode: str = "batch"
     """``"batch"`` for headless optimization; ``"imgui"``/``"glfw"`` to watch
     (interactive GUI names vary by SOFA build — check ``runSofa --help``)."""
+    runner: Literal["runsofa", "python"] = "runsofa"
+    """``"runsofa"`` (default) or ``"python"`` to launch an in-process Python
+    worker instead. The Python runner imports Sofa directly, giving the scene
+    access to ``Sofa.Core.Node``, ``Sofa.Simulation.animate()``, etc. while
+    keeping full subprocess isolation."""
     float_step: float | None = None
     """Optional quantization step for float parameter sampling (None = continuous)."""
 
@@ -211,13 +221,51 @@ class SofaOptProject:
     n_parallel: int = 5
     n_generations: int = 100
     cmaes_sigma0: float = 1.0
-    cmaes_startup_trials: int = 50
+    cmaes_startup_trials: int | None = None
+    """Number of space-filling startup trials before the model-based sampler
+    takes over. ``None`` (default) auto-sizes from the number of searched
+    parameters — see :meth:`resolve_startup_trials` — so adding/freezing
+    parameters rescales the exploration phase automatically."""
+    sampler: Literal["cmaes", "tpe", "random", "gp"] = "cmaes"
+    """Optuna sampler: ``"cmaes"`` (default), ``"tpe"`` (Bayesian TPE),
+    ``"random"``, or ``"gp"`` (Gaussian-process Bayesian optimization, the
+    sample-efficient choice for expensive evaluations in <20-D).
+    ``cmaes_sigma0`` / ``cmaes_startup_trials`` are only used when
+    ``sampler="cmaes"``; ``cmaes_startup_trials`` also seeds ``"gp"`` startup."""
+    cmaes_with_margin: bool = False
+    """Use CMA-ES *with Margin* (Hamano et al., GECCO 2022) — keeps
+    low-cardinality integer parameters from stagnating under naïve
+    discretization. Only applies when ``sampler="cmaes"``."""
+    seed_sampler: Literal["random", "sobol"] = "random"
+    """Initial-design sampler used for the startup/independent phase of
+    ``"cmaes"`` and ``"gp"``. ``"sobol"`` gives a space-filling Sobol' (QMC)
+    design that covers parameter interactions evenly before the model-based
+    phase begins; ``"random"`` (default) preserves prior behavior."""
+    seed_sampler_seed: int = 1234
+    """Scramble seed for the Sobol' startup design. Change it to get an
+    independent (but equally balanced) exploration — e.g. for a validation
+    run that should not revisit the previous run's startup points."""
+    multi_objective: bool = False
+    """When True each :class:`TestSpec` becomes a separate Pareto objective and
+    NSGA-II is used. Set ``TestSpec.direction`` per test to ``"maximize"`` or
+    ``"minimize"``. Gating and score weighting are disabled in this mode."""
+    dedup_trials: bool = False
+    """Skip SOFA for a parameter vector that already completed: the recorded
+    score is reused (told to Optuna immediately, trial marked ``cached``).
+    Only safe when the objective is DETERMINISTIC — projects that average
+    noise over run repeats must keep this off. A converged CMA-ES endgame
+    otherwise re-simulates one lattice point for whole generations.
+    Ignored for multi-objective studies."""
+    stall_generations: int = 0
+    """Stop the run early after this many consecutive generations without any
+    improvement of the best score (0 = run all ``n_generations``). Post-run
+    steps (summary video, report) still execute. Ignored for multi-objective
+    studies."""
     hard_fail_score: float = -3.0
     max_active_sofa_procs: int = 12
     max_run_relaunches: int = 0
     sofa_realtime_timeout: float = 200.0
     prepare_timeout: float = 60.0
-    stl_delete_delay: float = 30.0
 
     # --- dashboard wiring (optional) --------------------------------------
     run_script: Path | None = None
@@ -235,6 +283,31 @@ class SofaOptProject:
     title: str = ""
     """Dashboard title. Defaults to ``name`` when empty."""
 
+    # --- in-run frame recording (python runner only) ----------------------
+    record_frames: bool = False
+    """When True and runner=="python", capture frames during each trial run and
+    write a fragmented MP4 to ``trial_dir/trial.mp4``. The video is valid even
+    when the runner is killed by ScoreWriter mid-simulation. Use
+    ``cleanup_trial_recordings()`` from ``sofaopt.video`` to keep only the
+    top/bottom N videos after the run."""
+    record_frame_skip: int = 16
+    """Capture every Nth simulation step (default 16)."""
+    record_frame_size: tuple = (640, 480)
+    """(width, height) of the captured video frames."""
+    record_keep_top_n: int = 15
+    """After the run, auto-cleanup keeps recordings for this many best trials."""
+    record_keep_bottom_n: int = 5
+    """After the run, auto-cleanup keeps recordings for this many worst trials."""
+    record_prune_every_n: int = 20
+    """Prune excess trial recordings every N completed trials during the run (0 = only at end).
+    With n_parallel=4 and the default of 20, the first prune fires after trial 20 (gen 5),
+    the second after trial 40 (gen 10), etc. The first prune rarely deletes anything since
+    keep_top_n + keep_bottom_n == 20 by default."""
+    record_summary_top_n: int = 5
+    """Number of highest-scoring trials to include in the summary video."""
+    record_summary_bottom_n: int = 3
+    """Number of lowest-scoring trials to include in the summary video."""
+
     # --- optional shape-opt extras ----------------------------------------
     failed_preview_image: Path | None = None
     """Placeholder image shown in the dashboard for trials whose prepare hook
@@ -242,15 +315,43 @@ class SofaOptProject:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "work_dir", Path(self.work_dir).resolve())
-        object.__setattr__(self, "runsofa_exe", Path(self.runsofa_exe))
-        if self.n_parallel < 4:
+        if self.runsofa_exe is not None:
+            object.__setattr__(self, "runsofa_exe", Path(self.runsofa_exe))
+        if self.sampler == "cmaes" and not self.multi_objective and self.n_parallel < 4:
             raise ValueError("n_parallel must be >= 4 for CMA-ES to remain valid.")
         if not self.params:
             raise ValueError("project.params is empty — nothing to optimize.")
         if not self.tests:
             raise ValueError("project.tests is empty — nothing to evaluate.")
+        if self.multi_objective and len(self.tests) < 2:
+            raise ValueError("multi_objective=True requires at least 2 tests.")
+        if self.multi_objective and any(t.gated for t in self.tests):
+            import warnings
+            warnings.warn(
+                "multi_objective=True: gated tests are disabled "
+                "(gating is not supported in Pareto mode).",
+                stacklevel=2,
+            )
 
     # --- derived runtime paths --------------------------------------------
+    def resolve_startup_trials(self) -> int:
+        """Startup design size: the explicit value, or auto from dimensionality.
+
+        Auto = the power of two nearest (in log2) to ``k*d``, where ``d`` is the
+        number of searched (non-frozen) params and ``k`` is 5 for CMA-ES (only
+        needs a coverage map) or 10 for GP-BO (must fit a surrogate; the
+        classic 10*d rule). Powers of two because the Sobol' startup design is
+        exactly balanced there. Examples (cmaes): d=6 -> 32, d=9 -> 32,
+        d=12 -> 64; (gp): d=6 -> 64.
+        """
+        if self.cmaes_startup_trials is not None:
+            return self.cmaes_startup_trials
+        import math
+
+        d = max(1, sum(1 for p in self.params if not p.is_frozen))
+        k = 10 if self.sampler == "gp" else 5
+        return 2 ** max(3, round(math.log2(k * d)))
+
     @property
     def runtime_dir(self) -> Path:
         return self.work_dir / "runtime"
@@ -296,6 +397,77 @@ class SofaOptProject:
         env = os.environ.copy()
         env.update({k: str(v) for k, v in self.sofa_env.items()})
         return env
+
+
+def load_project_file(project_path: Path | str, attr: str = "PROJECT") -> SofaOptProject:
+    """Load a :class:`SofaOptProject` from a user ``project.py`` file.
+
+    The file must assign ``PROJECT = SofaOptProject(...)`` (or ``attr``).
+    Used by the video CLI and subprocess entry points.
+    """
+    import importlib.util
+
+    project_path = Path(project_path)
+    spec = importlib.util.spec_from_file_location("_sofaopt_project", project_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load project file: {project_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    if not hasattr(mod, attr):
+        raise AttributeError(
+            f"{project_path} does not define a {attr} variable. "
+            f"Make sure the file assigns: {attr} = SofaOptProject(...)"
+        )
+    return getattr(mod, attr)
+
+
+def _spec_to_jsonable(spec: Any) -> dict[str, Any]:
+    from dataclasses import fields as _fields
+
+    return {
+        f.name: (str(v) if isinstance(v, Path) else v)
+        for f in _fields(spec)
+        for v in [getattr(spec, f.name)]
+    }
+
+
+def project_to_jsonable(project: SofaOptProject) -> dict[str, Any]:
+    """JSON-safe dict for handing a project to a subprocess.
+
+    Hooks (``prepare_trial``, ``constrain_params``, ``on_generation_end``)
+    cannot cross a process boundary and are dropped. This is the sanctioned
+    replacement for pickling the project (§9: no pickle for IPC).
+    """
+    from dataclasses import fields as _fields
+
+    out: dict[str, Any] = {}
+    for f in _fields(project):
+        v = getattr(project, f.name)
+        if v is not None and callable(v):
+            continue  # hook — not serializable, receiver runs hook-free
+        if isinstance(v, Path):
+            v = str(v)
+        elif f.name in ("params", "tests"):
+            v = [_spec_to_jsonable(s) for s in v]
+        elif isinstance(v, Mapping):
+            v = {k: str(val) for k, val in v.items()}
+        elif isinstance(v, tuple):
+            v = list(v)
+        out[f.name] = v
+    return out
+
+
+def project_from_jsonable(data: Mapping[str, Any]) -> SofaOptProject:
+    """Rebuild a (hook-free) :class:`SofaOptProject` from :func:`project_to_jsonable`."""
+    kwargs = dict(data)
+    kwargs["params"] = [ParamSpec(**p) for p in kwargs.get("params", [])]
+    kwargs["tests"] = [TestSpec(**t) for t in kwargs.get("tests", [])]
+    for key in ("work_dir", "runsofa_exe", "run_script", "config_file", "failed_preview_image"):
+        if kwargs.get(key):
+            kwargs[key] = Path(kwargs[key])
+    if "record_frame_size" in kwargs:
+        kwargs["record_frame_size"] = tuple(kwargs["record_frame_size"])
+    return SofaOptProject(**kwargs)
 
 
 def param_specs_from_dataclass(instance: Any) -> list[ParamSpec]:

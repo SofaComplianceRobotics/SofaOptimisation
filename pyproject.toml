@@ -17,6 +17,7 @@ keywords = ["sofa", "optimization", "cma-es", "optuna", "simulation"]
 # SofaPython3 works, configured via the project's runsofa_exe / sofa_env.
 dependencies = [
     "optuna>=3.0",
+    "cmaes>=0.10",
     "numpy>=1.21",
 ]
 
@@ -25,11 +26,41 @@ dependencies = [
 dashboard = ["dash>=2.0", "plotly>=5.0", "cmaes>=0.10"]
 # STL preview rendering for shape-optimization projects (optional).
 preview = ["pyvista>=0.40"]
-dev = ["pytest>=7.0"]
+# Post-hoc parameter analysis: fANOVA importance + surrogate interaction map.
+analysis = ["scikit-learn>=1.1"]
+# Trial recording and offline video generation (record_frames=True, video.py,
+# the dashboard's summary-video button). ffmpeg stays an external tool on PATH.
+video = ["pygame>=2.1", "PyOpenGL>=3.1", "Pillow>=9.0", "opencv-python>=4.5"]
+dev = ["pytest>=7.0", "ruff>=0.15"]
 
 [project.urls]
 Homepage = "https://github.com/SofaComplianceRobotics/SofaOptimisation"
 Repository = "https://github.com/SofaComplianceRobotics/SofaOptimisation"
+
+[tool.pytest.ini_options]
+# TestSpec is a public dataclass whose name looks like a test class to pytest.
+filterwarnings = ["ignore::pytest.PytestCollectionWarning"]
+
+[tool.ruff.lint]
+# Bug-finders first (F/E9/B), security (S), code smells (SIM/PL*), curated RUF extras.
+# Target version comes from requires-python: newer-only syntax gets flagged.
+select = ["E4", "E7", "E9", "F", "B", "C90", "PLC", "PLE", "PLW", "S", "SIM", "RUF"]
+ignore = [
+    "PLC0415", # imports inside functions: lazy imports keep the core install light —
+    #            dashboard/preview/analysis/video extras must not be needed at import time
+    "S603",   # subprocess without shell=True check: launching runSofa/ffmpeg subprocesses
+    #           IS this framework's job; commands are built from config, never from shell strings
+    "RUF001", # ambiguous unicode: accented/math characters in strings,
+    "RUF002", #   docstrings and comments are fine
+    "RUF003",
+    "RUF005", # "prefer unpacking over concatenation": churn without bug value
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"] # pytest asserts
+# In-run frame recorder: per-step best-effort GL/ffmpeg probing. Recording must
+# never fail a trial, and logging every animation step would spam the run log.
+"src/sofaopt/scene/frame_recorder.py" = ["S110", "SIM105"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

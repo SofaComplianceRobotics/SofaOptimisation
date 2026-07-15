@@ -16,19 +16,14 @@ The schema is the framework's contract with scenes:
     }
 
 A scene writes its result into the run slot matching its ``OPT_RUN_SLOT`` env.
+This module is stdlib-only so the scene side imports it too — optimizer and
+scenes must share one implementation of the locking/patch logic.
 """
 
-import json
 import time
 from pathlib import Path
 
-from sofaopt.core.io import (
-    _acquire_lock,
-    _read_json_safe,
-    _release_lock,
-    _replace_with_retry,
-    write_json,
-)
+from sofaopt.core.io import _read_json_safe, update_json_locked, write_json
 
 
 def init_trial_state(
@@ -76,33 +71,34 @@ def init_trial_state(
     write_json(path, payload)
 
 
+def patch_run_slot(data: dict, run_index: int, patch: dict, *, now: float) -> None:
+    """Apply ``patch`` to run slot ``run_index`` (1-based) in a state dict.
+
+    Backfills missing slots so out-of-order writers (relaunches, standalone
+    runs) never index past the list. Shared by the optimizer and the scene-side
+    :class:`~sofaopt.scene.ScoreWriter` so the slot semantics cannot diverge.
+    """
+    runs = data.get("runs")
+    if not isinstance(runs, list):
+        runs = []
+    while len(runs) < run_index:
+        runs.append({"run": len(runs) + 1})
+    slot = runs[run_index - 1]
+    if not isinstance(slot, dict):
+        slot = {"run": run_index}
+    slot.update(patch)
+    slot["run"] = run_index
+    slot["updated_at"] = now
+    runs[run_index - 1] = slot
+    data["runs"] = runs
+    data["updated_at"] = now
+
+
 def update_trial_run(path: Path, run_index: int, patch: dict) -> None:
     """Atomically update one run slot in trial_state.json."""
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    if not _acquire_lock(lock_path):
-        return
-    try:
-        data = _read_json_safe(path)
-        runs = data.get("runs")
-        if not isinstance(runs, list):
-            runs = []
-        while len(runs) < run_index:
-            runs.append({"run": len(runs) + 1})
-        slot = runs[run_index - 1]
-        if not isinstance(slot, dict):
-            slot = {"run": run_index}
-        slot.update(patch)
-        slot["run"] = run_index
-        slot["updated_at"] = time.time()
-        runs[run_index - 1] = slot
-        data["runs"] = runs
-        data["updated_at"] = time.time()
-
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        _replace_with_retry(tmp, path)
-    finally:
-        _release_lock(lock_path)
+    update_json_locked(
+        path, lambda data: patch_run_slot(data, run_index, patch, now=time.time())
+    )
 
 
 def read_trial_run(path: Path, run_index: int) -> dict | None:
@@ -120,17 +116,11 @@ def read_trial_state(path: Path) -> dict:
     return _read_json_safe(path)
 
 
+def _apply_summary_patch(data: dict, patch: dict) -> None:
+    data.update(patch)
+    data["updated_at"] = time.time()
+
+
 def update_trial_summary(path: Path, patch: dict) -> None:
     """Atomically update top-level trial summary fields in trial_state.json."""
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    if not _acquire_lock(lock_path):
-        return
-    try:
-        data = _read_json_safe(path)
-        data.update(patch)
-        data["updated_at"] = time.time()
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        _replace_with_retry(tmp, path)
-    finally:
-        _release_lock(lock_path)
+    update_json_locked(path, lambda data: _apply_summary_patch(data, patch))

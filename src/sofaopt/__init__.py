@@ -44,15 +44,24 @@ from .project import (
 )
 
 __all__ = [
+    "DashboardTab",
     "ParamSpec",
-    "TestSpec",
-    "TrialPrep",
     "PrepareHook",
     "SofaOptProject",
-    "param_specs_from_dataclass",
-    "run_optimization",
+    "TestSpec",
+    "TrialPrep",
+    "archive_run",
+    "cleanup_trial_recordings",
+    "delete_archive",
+    "generate_selected_videos",
+    "generate_summary_video",
+    "generate_trial_video",
     "launch_dashboard",
-    "DashboardTab",
+    "list_archives",
+    "param_specs_from_dataclass",
+    "restore_archive",
+    "run_optimization",
+    "run_sensitivity_analysis",
 ]
 
 __version__ = "0.1.0"
@@ -68,6 +77,30 @@ def __getattr__(name: str):
         from .dashboard.app import launch_dashboard
 
         return launch_dashboard
+    if name == "run_sensitivity_analysis":
+        from .sensitivity import run_sensitivity_analysis
+
+        return run_sensitivity_analysis
+    if name in ("archive_run", "list_archives", "restore_archive", "delete_archive"):
+        from .core import archive
+
+        return getattr(archive, name)
+    if name == "generate_trial_video":
+        from .video import generate_trial_video
+
+        return generate_trial_video
+    if name == "generate_selected_videos":
+        from .video import generate_selected_videos
+
+        return generate_selected_videos
+    if name == "generate_summary_video":
+        from .video import generate_summary_video
+
+        return generate_summary_video
+    if name == "cleanup_trial_recordings":
+        from .video import cleanup_trial_recordings
+
+        return cleanup_trial_recordings
     if name == "DashboardTab":
         from .dashboard.app import DashboardTab
 

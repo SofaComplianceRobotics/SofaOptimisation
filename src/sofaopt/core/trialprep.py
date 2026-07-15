@@ -15,11 +15,14 @@ no hook at all — the scene just reads ``params.json``.
 
 from __future__ import annotations
 
+import logging
 import json
 from pathlib import Path
 from typing import Any
 
 from sofaopt.project import SofaOptProject, TrialPrep
+
+logger = logging.getLogger(__name__)
 
 
 def _round_float(value: float) -> float:
@@ -63,8 +66,10 @@ def prepare_trial(
 ) -> TrialPrep:
     """Write params.json and run the project's prepare hook (if any).
 
-    Returns a :class:`TrialPrep`. Raises whatever the hook raises (the caller
-    treats that as a hard failure for the trial).
+    The hook runs under ``project.prepare_timeout`` (a hung user hook must not
+    wedge the whole generation). Returns a :class:`TrialPrep`. Raises whatever
+    the hook raises, or :class:`TimeoutError` — the caller treats either as a
+    hard failure for the trial.
     """
     trial_dir.mkdir(parents=True, exist_ok=True)
     (trial_dir / "params.json").write_text(
@@ -74,12 +79,48 @@ def prepare_trial(
     if project.prepare_trial is None:
         return TrialPrep()
 
-    prep = project.prepare_trial(params, trial_dir)
+    prep = _run_hook_with_timeout(project, params, trial_dir)
     if prep is None:  # tolerate hooks that only set env and return nothing
         return TrialPrep()
     # Normalize env values to strings.
     prep.env = {k: str(v) for k, v in prep.env.items()}
     return prep
+
+
+def _run_hook_with_timeout(
+    project: SofaOptProject, params: dict[str, Any], trial_dir: Path
+) -> TrialPrep | None:
+    """Run the prepare hook, enforcing ``project.prepare_timeout`` when > 0.
+
+    Python threads cannot be killed: on timeout the worker is abandoned as a
+    daemon (it can no longer affect the trial, which is hard-failed) and a
+    TimeoutError is raised so the generation keeps moving.
+    """
+    timeout = float(project.prepare_timeout or 0)
+    if timeout <= 0:
+        return project.prepare_trial(params, trial_dir)
+
+    import threading
+
+    result: dict[str, Any] = {}
+
+    def _worker() -> None:
+        try:
+            result["prep"] = project.prepare_trial(params, trial_dir)
+        except BaseException as exc:  # re-raised on the caller thread below
+            result["exc"] = exc
+
+    t = threading.Thread(target=_worker, daemon=True, name="sofaopt-prepare")
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError(
+            f"prepare_trial hook exceeded prepare_timeout={timeout:.0f}s "
+            f"for {trial_dir.name}"
+        )
+    if "exc" in result:
+        raise result["exc"]
+    return result.get("prep")
 
 
 def render_preview(
@@ -108,15 +149,15 @@ def render_preview(
         else:
             shutil.copy2(image, local_path)
         shutil.copy2(local_path, previews_dir / flat_name)
-        print(f"[preview] Saved {flat_name}")
+        logger.info(f"[preview] Saved {flat_name}")
     except Exception as e:
-        print(f"[warn] Preview failed for {image.name}: {e}")
+        logger.warning(f"[warn] Preview failed for {image.name}: {e}")
         if failed_preview is not None and failed_preview.exists():
             try:
                 shutil.copy2(failed_preview, local_path)
                 shutil.copy2(local_path, previews_dir / flat_name)
             except Exception as fallback_err:
-                print(f"[warn] Failed-preview fallback failed: {fallback_err}")
+                logger.warning(f"[warn] Failed-preview fallback failed: {fallback_err}")
 
 
 def _render_stl(stl_path: Path, out_png: Path) -> None:

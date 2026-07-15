@@ -8,11 +8,63 @@ import os
 from dash import ALL, Input, Output, State, ctx
 
 from sofaopt.core import envkeys
+from sofaopt.dashboard import context
 from sofaopt.dashboard.process.process_manager import (
     _read_proc_log,
+    optimize_running,
     start_optimize,
     stop_optimize,
 )
+
+
+def _selected_tests(check_vals, check_ids, store) -> tuple[list[str], dict[str, int]]:
+    """Checked test names and their stored weights, in catalog order."""
+    test_names: list[str] = []
+    test_weights: dict[str, int] = {}
+    for checks, cid in zip(check_vals, check_ids, strict=True):
+        if checks:
+            name = cid["test"]
+            test_names.append(name)
+            test_weights[name] = int(store.get(name, 0))
+    return test_names, test_weights
+
+
+def _selection_error(test_names, gated_names, test_weights, sampler, n_parallel) -> str | None:
+    """Validation message for the Run request, or None when it can start."""
+    if not test_names:
+        return "No tests selected."
+    if len(gated_names) == len(test_names):
+        return "At least one selected test must stay ungated so the gate can open."
+    total = sum(test_weights.values())
+    if total != 100:
+        return f"Weights must sum to 100% (currently {total}%)."
+    if sampler == "cmaes" and int(n_parallel or 0) < 4:
+        return "CMA-ES needs Parallel >= 4. Lower it only with a different sampler."
+    return None
+
+
+def _optimizer_env(
+    test_names, test_weights, gated_names,
+    sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
+) -> dict:
+    """Environment for the optimizer subprocess: selection + setting overrides."""
+    env = os.environ.copy()
+    env[envkeys.SELECTED_TESTS] = ",".join(test_names)
+    env[envkeys.TEST_WEIGHTS] = json.dumps(test_weights)
+    if gated_names:
+        env[envkeys.GATED_TESTS] = ",".join(gated_names)
+
+    # Optimizer-setting overrides → honored by run_optimization before build_study.
+    if sampler:
+        env[envkeys.SAMPLER] = str(sampler)
+    if seed_sampler:
+        env[envkeys.SEED_SAMPLER] = str(seed_sampler)
+    env[envkeys.CMAES_MARGIN] = "1" if (cmaes_margin and "margin" in cmaes_margin) else "0"
+    if n_parallel:
+        env[envkeys.N_PARALLEL] = str(int(n_parallel))
+    if n_generations:
+        env[envkeys.N_GENERATIONS] = str(int(n_generations))
+    return env
 
 
 def register_optimise_callbacks(app) -> None:
@@ -173,40 +225,35 @@ def register_optimise_callbacks(app) -> None:
         State({"type": "gate-check", "test": ALL}, "value"),
         State({"type": "gate-check", "test": ALL}, "id"),
         State("opt-weights-store", "data"),
+        State("opt-sampler", "value"),
+        State("opt-seed-sampler", "value"),
+        State("opt-cmaes-margin", "value"),
+        State("opt-n-parallel", "value"),
+        State("opt-n-generations", "value"),
         prevent_initial_call=True,
     )
-    def handle_optimise(_, __, check_vals, check_ids, gate_vals, gate_ids, store):
+    def handle_optimise(
+        _, __, check_vals, check_ids, gate_vals, gate_ids, store,
+        sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
+    ):
         if ctx.triggered_id == "opt-stop-btn":
             return stop_optimize()
 
         store = store or {}
-        test_names: list[str] = []
-        test_weights: dict[str, int] = {}
-        for checks, cid in zip(check_vals, check_ids):
-            if checks:
-                name = cid["test"]
-                test_names.append(name)
-                test_weights[name] = int(store.get(name, 0))
+        test_names, test_weights = _selected_tests(check_vals, check_ids, store)
+        gated_names = [
+            cid["test"]
+            for checks, cid in zip(gate_vals, gate_ids, strict=True)
+            if checks and cid["test"] in test_names
+        ]
 
-        gated_names: list[str] = []
-        for checks, cid in zip(gate_vals, gate_ids):
-            if checks and cid["test"] in test_names:
-                gated_names.append(cid["test"])
-
-        if not test_names:
-            return "No tests selected."
-        if len(gated_names) == len(test_names):
-            return "At least one selected test must stay ungated so the gate can open."
-        total = sum(test_weights.values())
-        if total != 100:
-            return f"Weights must sum to 100% (currently {total}%)."
-
-        env = os.environ.copy()
-        env[envkeys.SELECTED_TESTS] = ",".join(test_names)
-        env[envkeys.TEST_WEIGHTS] = json.dumps(test_weights)
-        if gated_names:
-            env[envkeys.GATED_TESTS] = ",".join(gated_names)
-        return start_optimize(env)
+        error = _selection_error(test_names, gated_names, test_weights, sampler, n_parallel)
+        if error:
+            return error
+        return start_optimize(_optimizer_env(
+            test_names, test_weights, gated_names,
+            sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
+        ))
 
     @app.callback(
         Output("opt-log", "children"),
@@ -214,3 +261,20 @@ def register_optimise_callbacks(app) -> None:
     )
     def update_opt_log(_):
         return _read_proc_log("optimize")
+
+    @app.callback(
+        Output("opt-start-btn", "children"),
+        Output("opt-stop-btn", "children"),
+        Output("opt-stop-btn", "disabled"),
+        Input("opt-interval", "n_intervals"),
+    )
+    def refresh_run_buttons(_):
+        """Start/Stop are really Start/Resume + Pause: reflect that live."""
+        running = optimize_running()
+        try:
+            has_study = context.project().db_path.exists()
+        except Exception:
+            has_study = False
+        start_label = ("Resume Optimisation" if has_study and not running
+                       else "Start Optimisation")
+        return start_label, "Pause", not running

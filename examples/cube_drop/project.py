@@ -22,6 +22,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import dataclasses
+
 from sofaopt import ParamSpec, SofaOptProject, TestSpec, TrialPrep
 
 HERE = Path(__file__).resolve().parent
@@ -99,4 +101,76 @@ PROJECT = SofaOptProject(
     cmaes_startup_trials=8,
     sofa_realtime_timeout=60.0,
     run_script=HERE / "run.py",
+)
+
+# ---------------------------------------------------------------------------
+# Variant projects — switch with: python run.py --variant <name>
+# ---------------------------------------------------------------------------
+
+# TPE (Bayesian) sampler — often converges faster than CMA-ES with ≤ 5 parameters.
+PROJECT_TPE = dataclasses.replace(PROJECT, name="cube_drop_tpe", sampler="tpe")
+
+# GP Bayesian optimization — the sample-efficient choice when each simulation
+# is expensive and the searched dimensionality is small (< ~20).  Overkill for
+# this toy, but demonstrates the wiring (see docs/optimization-guide.md §2).
+PROJECT_GP = dataclasses.replace(PROJECT, name="cube_drop_gp", sampler="gp")
+
+# Sobol' space-filling startup — the first `cmaes_startup_trials` candidates
+# come from a scrambled Sobol' (QMC) design instead of uniform random, so the
+# exploration phase covers the space (and parameter interactions) evenly.
+# Change seed_sampler_seed for an independent but equally balanced design.
+PROJECT_SOBOL = dataclasses.replace(
+    PROJECT, name="cube_drop_sobol", seed_sampler="sobol"
+)
+
+# Python in-process runner — scene imports Sofa directly instead of runSofa.
+# Gives scene code access to Sofa.Core / Sofa.Simulation while keeping
+# subprocess isolation.  Useful when the scene needs to call Sofa.Simulation.reset()
+# or read constraint matrices between goals.
+PROJECT_PYTHON_RUNNER = dataclasses.replace(
+    PROJECT,
+    name="cube_drop_python",
+    runner="python",
+    record_frames=True,
+    record_frame_skip=16,
+    record_frame_size=(640, 480),
+)
+
+# Multi-objective (NSGA-II) — fall_fast vs compact.  The cube should fall
+# fast (wants large size + high mass) but also be compact (wants small size).
+# No single solution wins both; NSGA-II returns the full Pareto trade-off front.
+_PARETO_TESTS = [
+    TestSpec(
+        "fall_fast",
+        scene_file=HERE / "scene.py",
+        label="Fall speed",
+        description="reach the floor as soon as possible (big + heavy)",
+        max_score=100.0,
+        direction="maximize",
+    ),
+    TestSpec(
+        "compact",
+        scene_file=HERE / "scene_compact.py",
+        label="Compact",
+        description="prefer a small cube (competes with fall_fast)",
+        max_score=100.0,
+        direction="maximize",
+    ),
+]
+
+PROJECT_MULTI_OBJ = dataclasses.replace(
+    PROJECT,
+    name="cube_drop_pareto",
+    tests=_PARETO_TESTS,
+    multi_objective=True,
+    n_parallel=5,
+)
+
+# Same Pareto setup but using the Python in-process runner instead of runSofa.
+# Use this to verify multi-objective + python runner interoperate correctly and
+# to compare wall-clock time per generation vs the runSofa baseline above.
+PROJECT_MULTI_OBJ_PYTHON = dataclasses.replace(
+    PROJECT_MULTI_OBJ,
+    name="cube_drop_pareto_python",
+    runner="python",
 )

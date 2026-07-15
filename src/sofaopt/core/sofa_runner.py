@@ -8,13 +8,19 @@ never outlive the optimizer.
 
 from __future__ import annotations
 
+import contextlib
+import logging
+import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 from sofaopt.core import envkeys
 from sofaopt.project import SofaOptProject
+
+logger = logging.getLogger(__name__)
 
 # --- Windows Job Object: kill all SOFA children if the optimizer dies ---------
 SOFA_JOB_HANDLE = None
@@ -22,7 +28,7 @@ SOFA_JOB_HANDLE = None
 
 def ensure_windows_sofa_job() -> None:
     """Create one kill-on-close Job Object for SOFA children (Windows only)."""
-    global SOFA_JOB_HANDLE
+    global SOFA_JOB_HANDLE  # noqa: PLW0603  # process-wide Job Object singleton, created once
     if os.name != "nt" or SOFA_JOB_HANDLE is not None:
         return
 
@@ -103,7 +109,7 @@ def attach_process_to_sofa_job(proc: subprocess.Popen) -> None:
         SOFA_JOB_HANDLE, wintypes.HANDLE(proc._handle)
     ):
         err = ctypes.get_last_error()
-        print(f"[warn] Could not attach SOFA process {proc.pid} to job (winerr={err}).")
+        logger.warning(f"[warn] Could not attach SOFA process {proc.pid} to job (winerr={err}).")
 
 
 def launch_sofa(
@@ -138,10 +144,39 @@ def launch_sofa(
     trial_env[envkeys.TEST_RUN_INDEX] = str(test_run_index)
     trial_env[envkeys.TEST_RUN_TOTAL] = str(test_run_total)
 
-    cmd = [str(project.runsofa_exe)]
-    for plugin in project.sofa_plugins:
-        cmd += ["-l", plugin]
-    cmd += ["-g", project.gui_mode, str(scene_file)]
+    if project.runner == "python":
+        runner_script = Path(__file__).parent.parent / "scene" / "runner.py"
+        trial_env[envkeys.SOFA_PLUGINS] = json.dumps(list(project.sofa_plugins))
+        # SofaPython3 puts its Python bindings under <root>/lib/python3/site-packages.
+        # When runner=="python" the subprocess is a plain Python interpreter (not
+        # runSofa's bundled Python), so we must ensure those bindings are reachable.
+        sofa_py3_root = trial_env.get("SOFAPYTHON3_ROOT", "")
+        if sofa_py3_root:
+            sp3_site = str(Path(sofa_py3_root) / "lib" / "python3" / "site-packages")
+            existing = trial_env.get("PYTHONPATH", "")
+            if sp3_site not in existing.split(os.pathsep):
+                trial_env["PYTHONPATH"] = (
+                    sp3_site + (os.pathsep + existing if existing else "")
+                )
+        if project.record_frames:
+            trial_dir = trial_state_path.parent
+            w, h = project.record_frame_size
+            trial_env[envkeys.RECORD_FRAMES] = "1"
+            trial_env[envkeys.RECORD_OUTPUT] = str(trial_dir / "trial.mp4")
+            trial_env[envkeys.RECORD_FRAME_SKIP] = str(project.record_frame_skip)
+            trial_env[envkeys.RECORD_WIDTH] = str(w)
+            trial_env[envkeys.RECORD_HEIGHT] = str(h)
+        cmd = [sys.executable, str(runner_script), str(scene_file)]
+    else:
+        if project.runsofa_exe is None:
+            raise ValueError(
+                "project.runsofa_exe is not set. "
+                "Either pass runsofa_exe=Path(...) or use runner='python'."
+            )
+        cmd = [str(project.runsofa_exe)]
+        for plugin in project.sofa_plugins:
+            cmd += ["-l", plugin]
+        cmd += ["-g", project.gui_mode, str(scene_file)]
 
     creation_flags = 0
     if os.name == "nt":
@@ -154,47 +189,108 @@ def launch_sofa(
     # One log per run slot next to trial_state.json, so early crashes are
     # diagnosable (overwritten on each relaunch).
     log_path = trial_state_path.parent / f"sofa_run{run_slot}.log"
-    log_file = open(log_path, "w", encoding="utf-8", errors="replace")
-    proc = subprocess.Popen(
-        cmd,
-        env=trial_env,
-        cwd=str(project.work_dir),
-        creationflags=creation_flags,
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-    )
-    log_file.close()
+    with open(log_path, "w", encoding="utf-8", errors="replace") as log_file:
+        proc = subprocess.Popen(
+            cmd,
+            env=trial_env,
+            cwd=str(project.work_dir),
+            creationflags=creation_flags,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
     attach_process_to_sofa_job(proc)
     return proc
 
 
-def active_sofa_process_count(processes: list[tuple]) -> int:
-    """Count running SOFA children across the generation's launched runs.
+def kill_process_tree(proc: subprocess.Popen) -> None:
+    """Kill a SOFA child AND everything it spawned (ffmpeg encoder, workers).
 
-    Each entry's third element is its ``runs`` list of ``(Popen, path, slot)``.
+    A bare ``proc.kill()`` reaps only the direct child; its descendants stay
+    alive inside the Job Object, which releases them only when the OPTIMIZER
+    exits — mid-campaign that leaks them for hours. Single source of truth for
+    every kill in core and dashboard.
+    """
+    if os.name == "nt":
+        # Best-effort tree kill; proc.kill() below is the fallback.
+        with contextlib.suppress(Exception):
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],  # noqa: S607  # Windows system tool, resolved from PATH
+                capture_output=True, timeout=15, check=False,
+            )
+    # Direct child may already be gone — that's the goal.
+    with contextlib.suppress(Exception):
+        proc.kill()
+
+
+def wait_or_kill(proc: subprocess.Popen, timeout_s: float, kill_grace_s: float = 5.0) -> bool:
+    """Wait for one SOFA process to exit; tree-kill it past ``timeout_s``.
+
+    The single-run form of the ``sofa_realtime_timeout`` backstop (the
+    generation finalizer applies the same timeout across its parallel scan).
+    Returns True when the process exited on its own, False when it was killed.
+    A kill is verified by polling; a child that survives it is kernel-wedged
+    (the known Windows SOFA failure mode) and is logged — it clears only on
+    reboot, so don't count on its slot.
+    """
+    deadline = time.time() + timeout_s
+    while proc.poll() is None:
+        if time.time() > deadline:
+            kill_process_tree(proc)
+            grace_end = time.time() + kill_grace_s
+            while proc.poll() is None and time.time() < grace_end:
+                time.sleep(0.2)
+            if proc.poll() is None:
+                logger.warning(
+                    "SOFA child %s survived the kill (wedged in native code); "
+                    "it will linger until reboot", proc.pid,
+                )
+            return False
+        time.sleep(0.2)
+    return True
+
+
+def active_sofa_process_count(launched: list) -> int:
+    """Count running SOFA children across a generation's launched trials.
+
+    ``launched`` is a list of :class:`~sofaopt.core.generation.types.LaunchedTrial`
+    (duck-typed here to keep the layering: only ``.runs`` is read).
     """
     active = 0
-    for entry in processes:
-        if len(entry) < 3:
-            continue
-        for p, _, _ in entry[2]:
+    for entry in launched:
+        for p, _, _ in entry.runs:
             if p.poll() is None:
                 active += 1
     return active
 
 
 def wait_for_slot(
-    processes: list[tuple], limit: int, gen_index: int, trial_index: int
+    processes: list,
+    limit: int,
+    gen_index: int,
+    trial_index: int,
+    timeout_s: float | None = None,
 ) -> None:
-    """Block until the active SOFA process count drops below ``limit``."""
+    """Block until the active SOFA process count drops below ``limit``.
+
+    ``timeout_s`` is a backstop: if every active process is wedged (they will
+    be pruned only once the finalize loop runs), proceeding after the timeout
+    briefly exceeds the cap instead of deadlocking the launch phase.
+    """
     if limit <= 0:
         return
+    deadline = None if timeout_s is None else time.time() + timeout_s
     warned = False
     while active_sofa_process_count(processes) >= limit:
         if not warned:
-            print(
+            logger.info(
                 f"[throttle] Gen {gen_index:04d} Trial {trial_index:02d} "
                 f"waiting for active SOFA < {limit}"
             )
             warned = True
+        if deadline is not None and time.time() > deadline:
+            logger.info(
+                f"[throttle] Gen {gen_index:04d} Trial {trial_index:02d} "
+                f"waited {timeout_s:.0f}s with no free slot; launching anyway (backstop)"
+            )
+            return
         time.sleep(0.2)

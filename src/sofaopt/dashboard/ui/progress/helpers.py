@@ -6,14 +6,21 @@ from sofaopt.dashboard.data.cache import _load_trial_state
 _RUN_MAX_SCORE_CACHE: dict[str, float] = {}
 
 
+# Aggregations where a single run scores against a per-run ceiling and the runs
+# add up, so the catalog's test-total max_score spans every run. "sum" divides
+# the ceiling evenly; "exponential_coverage" also sums raw runs (it only adds a
+# coverage multiplier on top), so its per-run bar uses the same per-run ceiling.
+_ADDITIVE_AGGREGATIONS = {"sum", "exponential_coverage"}
+
+
 def _get_run_max_score(test_name: str) -> float:
     """Maximum score a single run of a test can reach (defaults to 1.0).
 
-    The catalog's ``max_score`` is the test-total ceiling. For ``sum``
-    aggregated tests that total spans every run, so a single run's bar must
-    be scaled by the per-run ceiling ``max_score / run_count`` instead. Other
-    aggregations score each run against the full ceiling, so the total is
-    used as-is.
+    The catalog's ``max_score`` is the test-total ceiling. For additive
+    aggregations (``sum``, ``exponential_coverage``) that total spans every run,
+    so a single run's bar must be scaled by the per-run ceiling
+    ``max_score / run_count`` instead. Other aggregations (``mean``, ``median``)
+    score each run against the full ceiling, so the total is used as-is.
     """
     if not test_name:
         return 1.0
@@ -23,7 +30,7 @@ def _get_run_max_score(test_name: str) -> float:
         spec = context.catalog().get(test_name)
         if spec is None:
             result = 1.0
-        elif spec.score_aggregation == "sum" and spec.run_count > 1:
+        elif spec.score_aggregation in _ADDITIVE_AGGREGATIONS and spec.run_count > 1:
             result = spec.max_score / spec.run_count
         else:
             result = spec.max_score
@@ -120,7 +127,7 @@ def _get_trial_actual_state(trial_record: dict) -> str:
     state = str(
         trial_state.get("state") or ("done" if trial_record.get("is_complete") else "running")
     ).lower()
-    terminal = {"done", "failed", "error", "pruned", "skipped", "cancelled"}
+    terminal = {"done", "failed", "error", "pruned", "skipped", "cancelled", "interrupted"}
     if (
         state not in terminal
         and runs
@@ -132,7 +139,7 @@ def _get_trial_actual_state(trial_record: dict) -> str:
 
 def _find_earliest_not_done(records: list[dict]) -> str | None:
     """DOM id of the earliest non-terminal trial card, for auto-scroll."""
-    terminal = {"done", "failed", "error", "pruned", "skipped", "cancelled"}
+    terminal = {"done", "failed", "error", "pruned", "skipped", "cancelled", "interrupted"}
     for record in records:
         if _get_trial_actual_state(record) not in terminal:
             return f"trial-card-{record.get('gen_index', 0):04d}-{record.get('trial_index', 0):04d}"

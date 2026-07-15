@@ -1,7 +1,10 @@
 """Performance graph and leaderboard."""
 
+import contextlib
+import logging
 import plotly.graph_objects as go
 
+from sofaopt.dashboard import context as _ctx
 from .colors import C_BG
 from .compute import _collect_all_test_names, compute_plot_data
 from .traces import (
@@ -10,6 +13,8 @@ from .traces import (
     _build_final_ticks,
     _build_hover_overlay,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _build_performance_graph(records: list[dict], summaries: list[dict]) -> go.Figure:
@@ -29,6 +34,7 @@ def _build_performance_graph(records: list[dict], summaries: list[dict]) -> go.F
                 _build_final_ticks(plot_data, bar_width),
             ]
             + _build_avg_traces(plot_data, all_test_names)
+            + _build_video_markers(records, plot_data)
         )
 
         fig = go.Figure(data=all_traces)
@@ -44,14 +50,45 @@ def _build_performance_graph(records: list[dict], summaries: list[dict]) -> go.F
             paper_bgcolor=C_BG,
             uirevision="performance-graph",
         )
-        try:
+        # Cosmetic animation only; transition support varies across plotly versions.
+        with contextlib.suppress(Exception):
             fig.layout.transition = dict(duration=600, easing="cubic-in-out")
-        except Exception:
-            pass
         return fig
     except Exception as exc:
-        print(f"[warn] Error building performance graph: {exc}")
+        logger.warning(f"[warn] Error building performance graph: {exc}")
         return go.Figure().add_annotation(text=f"Error: {exc}")
+
+
+def _build_video_markers(records: list[dict], plot_data: dict) -> list:
+    """Scatter trace marking trials that have a cached trial.mp4 recording."""
+    try:
+        trials_dir = _ctx.trials_dir()
+        xs = plot_data["xs"]
+        final_scores = plot_data["final_scores"]
+        video_xs, video_ys = [], []
+        for i, r in enumerate(records):
+            if i >= len(xs):
+                break
+            mp4 = trials_dir / r.get("gen_name", "") / r.get("trial_name", "") / "trial.mp4"
+            if mp4.exists():
+                video_xs.append(xs[i])
+                video_ys.append(final_scores[i])
+        if not video_xs:
+            return []
+        return [
+            go.Scatter(
+                x=video_xs,
+                y=video_ys,
+                mode="markers",
+                name="Has video",
+                uid="video-markers",
+                marker=dict(symbol="star", size=10, color="#ff7f0e", opacity=0.9),
+                hoverinfo="skip",
+                showlegend=True,
+            )
+        ]
+    except Exception:
+        return []
 
 
 def _build_leaderboard_html(records: list[dict]):
