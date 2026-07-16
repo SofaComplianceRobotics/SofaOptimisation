@@ -14,6 +14,7 @@ Comparison data derives ONLY from each archive's recorded scores
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -46,6 +47,7 @@ class ArchiveInfo:
     best_score: float | None
     best_params: dict
     project_snapshot: dict
+    summary_stats: dict
 
     @property
     def trials_dir(self) -> Path:
@@ -113,6 +115,10 @@ def _build_manifest(project: SofaOptProject, *, name: str, notes: str) -> dict:
         "best_score": best["final_score"] if best else None,
         "best_params": (best or {}).get("params", {}),
         "project_snapshot": project_to_jsonable(project),
+        # Compact convergence/diversity summary, computed once here so the
+        # Archives comparison can rank runs on more than best score without
+        # re-walking every archive's full trial tree on each view.
+        "summary_stats": run_summary_stats(project.trials_dir, records=records),
     }
 
 
@@ -136,6 +142,7 @@ def load_archive_info(path: Path) -> ArchiveInfo:
         best_score=data.get("best_score"),
         best_params=dict(data.get("best_params", {})),
         project_snapshot=dict(data.get("project_snapshot", {})),
+        summary_stats=dict(data.get("summary_stats", {})),
     )
 
 
@@ -184,6 +191,114 @@ def restore_archive(project: SofaOptProject, archive: str | Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Run summary stats (generic — recorded results only, no domain knowledge)
+# ---------------------------------------------------------------------------
+
+def _pop_std(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    return (sum((v - mean) ** 2 for v in values) / len(values)) ** 0.5
+
+
+def _numeric_param_names(completed: list[dict]) -> list[str]:
+    names: list[str] = []
+    for r in completed:
+        for key, val in (r.get("params") or {}).items():
+            if isinstance(val, (int, float)) and key not in names:
+                names.append(key)
+    return names
+
+
+def _param_values(records: list[dict], name: str) -> list[float]:
+    return [r["params"][name] for r in records if isinstance(r.get("params", {}).get(name), (int, float))]
+
+
+def _diversity_collapse_pct(completed: list[dict], k_gens: int = 5) -> float | None:
+    """How much the searched population narrowed, in [0, 100] (0 = no
+    narrowing, 100 = fully converged). Mean over each numeric param that
+    actually VARIED early of ``1 - final_std/initial_std`` (first k gens vs
+    last k gens). Bounded and aggregate, so a single near-frozen param can't
+    dominate and truly-constant params (never varied) drop out. Generic —
+    reads only ``params``. ``None`` when there are too few generations."""
+    by_gen: dict[int, list[dict]] = {}
+    for r in completed:
+        by_gen.setdefault(r.get("gen_index", 0), []).append(r)
+    gens = sorted(by_gen)
+    if len(gens) < 4:
+        return None
+    half = min(k_gens, len(gens) // 2)
+    first = [r for g in gens[:half] for r in by_gen[g]]
+    last = [r for g in gens[-half:] for r in by_gen[g]]
+    collapses: list[float] = []
+    for name in _numeric_param_names(completed):
+        s0 = _pop_std(_param_values(first, name))
+        if s0 <= 1e-9:  # never varied early -> not a searched dimension here
+            continue
+        s1 = _pop_std(_param_values(last, name))
+        collapses.append(max(0.0, 1.0 - s1 / s0))
+    if not collapses:
+        return None
+    return round(100.0 * sum(collapses) / len(collapses), 1)
+
+
+def _trials_to_fraction(completed: list[dict], best: float, frac: float) -> int | None:
+    """First evaluation (1-based chron) reaching ``frac`` of the eventual best
+    — a convergence-speed proxy. ``None`` when best is non-positive (the
+    fraction is meaningless) or never reached."""
+    if best <= 0:
+        return None
+    target = best * frac
+    for r in completed:  # chronological (load_trial_records order preserved)
+        if r.get("final_score", float("-inf")) >= target:
+            return r.get("chron", 0) + 1
+    return None
+
+
+# Bump when run_summary_stats's schema changes so stored manifests recompute
+# instead of showing stale/absent fields (see _ensure_summary_stats).
+_STATS_VERSION = 1
+
+
+def run_summary_stats(trials_dir: Path, *, records: list[dict] | None = None) -> dict:
+    """Compact, generic convergence/diversity summary for one run.
+
+    Everything from recorded results only (``final_score``, ``params``,
+    ``gen_index``, ``failed``) plus restart-event count — no domain concepts,
+    so it works for any project. Stored in the archive manifest at archive
+    time and shown side-by-side in the Archives comparison. Pass ``records``
+    to reuse an already-loaded list (the archive-time caller has one).
+    """
+    from sofaopt.core.restart_events import load_restart_events
+
+    if records is None:
+        records = load_trial_records(trials_dir)
+    completed = [
+        r for r in records
+        if not r.get("failed") and isinstance(r.get("final_score"), (int, float))
+    ]
+    n_failed = sum(1 for r in records if r.get("failed"))
+    if not completed:
+        return {"version": _STATS_VERSION, "n_completed": 0, "n_failed": n_failed}
+
+    scores = [r["final_score"] for r in completed]
+    best = max(scores)
+    final_gen = max(r.get("gen_index", 0) for r in completed)
+    final_scores = [r["final_score"] for r in completed if r.get("gen_index") == final_gen]
+    return {
+        "version": _STATS_VERSION,
+        "n_completed": len(completed),
+        "n_failed": n_failed,
+        "mean_score": round(sum(scores) / len(scores), 3),
+        "final_mean": round(sum(final_scores) / len(final_scores), 3),
+        "final_std": round(_pop_std(final_scores), 3),
+        "trials_to_90pct_best": _trials_to_fraction(completed, best, 0.9),
+        "diversity_collapse_pct": _diversity_collapse_pct(completed),
+        "n_restarts": len(load_restart_events(trials_dir)),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Comparison
 # ---------------------------------------------------------------------------
 
@@ -210,6 +325,23 @@ def best_so_far_curve(trials_dir: Path) -> tuple[list[int], list[float]]:
     return xs, ys
 
 
+def _ensure_summary_stats(path: Path, info: ArchiveInfo) -> dict:
+    """Return an archive's stored summary stats, computing + persisting them
+    for archives that predate the feature or carry an older schema version
+    (write-through backfill: the first comparison pays the walk, later ones
+    are instant).
+    """
+    if info.summary_stats.get("version") == _STATS_VERSION:
+        return info.summary_stats
+    stats = run_summary_stats(info.trials_dir)
+    with contextlib.suppress(Exception):  # read-path best-effort: never fail a comparison
+        manifest_path = path / MANIFEST_NAME
+        data = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+        data["summary_stats"] = stats
+        manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return stats
+
+
 def comparison_data(
     project: SofaOptProject,
     archives: list[str | Path],
@@ -219,8 +351,8 @@ def comparison_data(
     """Comparison series for N archives (and optionally the live run).
 
     One entry per run: ``{label, curve: (xs, ys), info: ArchiveInfo | None,
-    best_score, best_params, n_trials, sampler, notes}`` — everything read
-    from recorded results, nothing recomputed.
+    best_score, best_params, n_trials, sampler, notes, summary_stats}`` —
+    everything read from recorded results, nothing recomputed.
     """
     from sofaopt.core.restart_events import load_restart_events
 
@@ -239,6 +371,7 @@ def comparison_data(
                 "notes": info.notes,
                 "info": info,
                 "restarts": load_restart_events(info.trials_dir),
+                "summary_stats": _ensure_summary_stats(path, info),
             }
         )
     if include_current and runtime_has_run_data(project):
@@ -256,6 +389,7 @@ def comparison_data(
                 "notes": "",
                 "info": None,
                 "restarts": load_restart_events(project.trials_dir),
+                "summary_stats": run_summary_stats(project.trials_dir, records=records),
             }
         )
     return entries

@@ -95,10 +95,51 @@ def _compare_options(infos) -> list[dict]:
     return options
 
 
-def _summary_children(entries) -> list:
-    """Summary table + best-params diff for the compared runs.
+def _fmt(value, spec: str = "") -> str:
+    """Format a possibly-missing numeric stat; '-' for None/non-numeric."""
+    if not isinstance(value, (int, float)):
+        return "-"
+    return format(value, spec) if spec else str(value)
 
-    The table doubles as the accessible 'table view' of the comparison chart.
+
+def _convergence_row(e) -> html.Tr:
+    s = e.get("summary_stats") or {}
+    final = f"{_fmt(s.get('final_mean'), '.1f')}±{_fmt(s.get('final_std'), '.1f')}"
+    collapse = _fmt(s.get("diversity_collapse_pct"), ".0f")
+    return html.Tr(
+        [
+            html.Td(e["label"]),
+            html.Td(f"{_fmt(s.get('n_completed'))}/{_fmt(s.get('n_failed'))}", className="text-end"),
+            html.Td(_fmt(s.get("mean_score"), ".1f"), className="text-end"),
+            html.Td(final, className="text-end"),
+            html.Td(_fmt(s.get("trials_to_90pct_best")), className="text-end"),
+            html.Td("-" if collapse == "-" else f"{collapse}%", className="text-end"),
+            html.Td(_fmt(s.get("n_restarts")), className="text-end"),
+        ]
+    )
+
+
+def _convergence_table(entries) -> list:
+    """Cross-run convergence & diversity table from each run's summary_stats.
+
+    'Diversity collapse' = how much the searched population narrowed from its
+    first to its last generations (100% = fully converged onto one design).
+    """
+    if not any(e.get("summary_stats") for e in entries):
+        return []
+    cols = ("Run", "Done/Fail", "Mean", "Final gen (mean±sd)", "→90% best", "Diversity collapse", "Restarts")
+    head = html.Thead(html.Tr([html.Th(c) for c in cols]))
+    rows = [_convergence_row(e) for e in entries]
+    return [
+        html.H6("Convergence & diversity", className="mt-3"),
+        html.Table([head, html.Tbody(rows)], className="table table-sm"),
+    ]
+
+
+def _summary_children(entries) -> list:
+    """Summary table + convergence stats + best-params diff for the compared runs.
+
+    The tables double as the accessible 'table view' of the comparison chart.
     """
     head = html.Thead(
         html.Tr([html.Th(h) for h in ("Run", "Sampler", "Trials", "Best score", "Notes")])
@@ -122,42 +163,105 @@ def _summary_children(entries) -> list:
             for e in entries
         ]
     )
-    children = [
+    return [
         html.H6("Summary"),
         html.Table([head, body], className="table table-sm"),
+        *_convergence_table(entries),
+        *_params_diff_table(entries),
     ]
 
-    param_names: list[str] = []
+
+def _all_param_names(entries) -> list[str]:
+    names: list[str] = []
     for e in entries:
         for k in e["best_params"]:
-            if k not in param_names:
-                param_names.append(k)
-    if param_names:
-        diff_head = html.Thead(
-            html.Tr([html.Th("Best params")] + [html.Th(e["label"]) for e in entries])
-        )
-        diff_rows = []
-        for name in param_names:
-            values = [e["best_params"].get(name) for e in entries]
-            cells = [
-                html.Td(f"{v:.4g}" if isinstance(v, float) else ("-" if v is None else str(v)))
-                for v in values
-            ]
-            distinct = len({repr(v) for v in values}) > 1
-            diff_rows.append(
-                html.Tr(
-                    [html.Td(name, className="fw-semibold" if distinct else "")] + cells,
-                    className="table-warning" if distinct else "",
-                )
-            )
-        children += [
-            html.H6("Best parameters (rows highlighted where runs differ)"),
-            html.Table([diff_head, html.Tbody(diff_rows)], className="table table-sm"),
+            if k not in names:
+                names.append(k)
+    return names
+
+
+def _params_diff_table(entries) -> list:
+    """Best-params-per-run table, rows highlighted where the runs differ."""
+    param_names = _all_param_names(entries)
+    if not param_names:
+        return []
+    diff_head = html.Thead(
+        html.Tr([html.Th("Best params")] + [html.Th(e["label"]) for e in entries])
+    )
+    diff_rows = []
+    for name in param_names:
+        values = [e["best_params"].get(name) for e in entries]
+        cells = [
+            html.Td(f"{v:.4g}" if isinstance(v, float) else ("-" if v is None else str(v)))
+            for v in values
         ]
-    return children
+        distinct = len({repr(v) for v in values}) > 1
+        diff_rows.append(
+            html.Tr(
+                [html.Td(name, className="fw-semibold" if distinct else "")] + cells,
+                className="table-warning" if distinct else "",
+            )
+        )
+    return [
+        html.H6("Best parameters (rows highlighted where runs differ)"),
+        html.Table([diff_head, html.Tbody(diff_rows)], className="table table-sm"),
+    ]
 
 
-def register_archives_callbacks(app) -> None:  # noqa: C901  # Dash registrar: total is the sum of its small nested callbacks; the flat registration list reads best in one place
+def _do_archive_now(name, notes, dirty):
+    """Stop-if-running, then archive the current runtime. Returns (status, dirty)."""
+    stopped = ""
+    if _optimize_running():
+        # Stop & archive: pause the run (clean — the study resumes if restored
+        # later), then move its runtime into the archive.
+        from sofaopt.dashboard.process.process_manager import stop_optimize_and_wait
+
+        if not stop_optimize_and_wait():
+            return html.Span("Could not stop the running optimization.", className="text-danger"), dirty
+        stopped = " (run stopped first — restore + Resume to continue it)"
+    try:
+        dest = archive_run(context.project(), name=name or "", notes=notes or "")
+        return html.Span(f"Archived to {dest.name}{stopped}", className="text-success"), (dirty or 0) + 1
+    except FileNotFoundError:
+        return html.Span("No run data to archive.", className="text-warning"), dirty
+    except Exception as exc:
+        logger.warning(f"[archive] Archive failed: {exc}")
+        return html.Span(f"Archive failed: {exc}", className="text-danger"), dirty
+
+
+def _do_restore(key, dirty):
+    if _optimize_running():
+        return html.Span("Stop the running optimization first.", className="text-danger"), dirty
+    try:
+        restore_archive(context.project(), key)
+        return html.Span(f"Restored {key} — it is the live run again.", className="text-success"), (dirty or 0) + 1
+    except Exception as exc:
+        logger.warning(f"[archive] Restore failed: {exc}")
+        return html.Span(f"Restore failed: {exc}", className="text-danger"), dirty
+
+
+def _do_delete(key, dirty):
+    try:
+        delete_archive(context.project(), key)
+        return html.Span(f"Deleted {key}.", className="text-success"), (dirty or 0) + 1
+    except Exception as exc:
+        logger.warning(f"[archive] Delete failed: {exc}")
+        return html.Span(f"Delete failed: {exc}", className="text-danger"), dirty
+
+
+def _do_compare(selected):
+    project = context.project()
+    archive_keys = [v for v in selected if v != _CURRENT]
+    entries = comparison_data(project, archive_keys, include_current=_CURRENT in selected)
+    # Stable palette slots: 0 is reserved for the live run; archives keep their
+    # position in the full (not selected) list across reselections.
+    color_index = {"current run": 0}
+    for i, info in enumerate(list_archives(project), start=1):
+        color_index[info.name] = i
+    return build_comparison_figure(entries, color_index), _summary_children(entries)
+
+
+def register_archives_callbacks(app) -> None:  # noqa: C901  # Dash registrar: cyclomatic count is the sum of each thin callback's one guard branch; the flat registration list reads best in one place (heavy bodies already extracted to _do_* helpers)
     @app.callback(
         Output("archives-table", "children"),
         Output("archive-compare-select", "options"),
@@ -180,27 +284,7 @@ def register_archives_callbacks(app) -> None:  # noqa: C901  # Dash registrar: t
     def archive_now(n_clicks, name, notes, dirty):
         if not n_clicks:
             raise PreventUpdate
-        stopped = ""
-        if _optimize_running():
-            # Stop & archive: pause the run (clean — the study resumes if
-            # restored later), then move its runtime into the archive.
-            from sofaopt.dashboard.process.process_manager import stop_optimize_and_wait
-
-            if not stop_optimize_and_wait():
-                return html.Span(
-                    "Could not stop the running optimization.", className="text-danger"
-                ), dirty
-            stopped = " (run stopped first — restore + Resume to continue it)"
-        try:
-            dest = archive_run(context.project(), name=name or "", notes=notes or "")
-            return html.Span(
-                f"Archived to {dest.name}{stopped}", className="text-success"
-            ), (dirty or 0) + 1
-        except FileNotFoundError:
-            return html.Span("No run data to archive.", className="text-warning"), dirty
-        except Exception as exc:
-            logger.warning(f"[archive] Archive failed: {exc}")
-            return html.Span(f"Archive failed: {exc}", className="text-danger"), dirty
+        return _do_archive_now(name, notes, dirty)
 
     @app.callback(
         Output("archive-action-status", "children", allow_duplicate=True),
@@ -212,19 +296,7 @@ def register_archives_callbacks(app) -> None:  # noqa: C901  # Dash registrar: t
     def restore_clicked(n_clicks_list, dirty):
         if not ctx.triggered_id or not any(n_clicks_list):
             raise PreventUpdate
-        if _optimize_running():
-            return html.Span(
-                "Stop the running optimization first.", className="text-danger"
-            ), dirty
-        key = ctx.triggered_id["name"]
-        try:
-            restore_archive(context.project(), key)
-            return html.Span(
-                f"Restored {key} — it is the live run again.", className="text-success"
-            ), (dirty or 0) + 1
-        except Exception as exc:
-            logger.warning(f"[archive] Restore failed: {exc}")
-            return html.Span(f"Restore failed: {exc}", className="text-danger"), dirty
+        return _do_restore(ctx.triggered_id["name"], dirty)
 
     @app.callback(
         Output("archive-delete-confirm", "displayed"),
@@ -248,12 +320,7 @@ def register_archives_callbacks(app) -> None:  # noqa: C901  # Dash registrar: t
     def delete_confirmed(submit_n_clicks, key, dirty):
         if not submit_n_clicks or not key:
             raise PreventUpdate
-        try:
-            delete_archive(context.project(), key)
-            return html.Span(f"Deleted {key}.", className="text-success"), (dirty or 0) + 1
-        except Exception as exc:
-            logger.warning(f"[archive] Delete failed: {exc}")
-            return html.Span(f"Delete failed: {exc}", className="text-danger"), dirty
+        return _do_delete(key, dirty)
 
     @app.callback(
         Output("archive-compare-graph", "figure"),
@@ -265,14 +332,4 @@ def register_archives_callbacks(app) -> None:  # noqa: C901  # Dash registrar: t
     def compare(n_clicks, selected):
         if not n_clicks or not selected:
             raise PreventUpdate
-        project = context.project()
-        archive_keys = [v for v in selected if v != _CURRENT]
-        entries = comparison_data(
-            project, archive_keys, include_current=_CURRENT in selected
-        )
-        # Stable palette slots: 0 is reserved for the live run; archives keep
-        # their position in the full (not selected) list across reselections.
-        color_index = {"current run": 0}
-        for i, info in enumerate(list_archives(project), start=1):
-            color_index[info.name] = i
-        return build_comparison_figure(entries, color_index), _summary_children(entries)
+        return _do_compare(selected)
