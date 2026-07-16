@@ -13,7 +13,11 @@ def build_performance_tab() -> html.Div:
 
             html.H3("Performance", className="mb-3"),
             html.Div(id="optimization-health-panel", className="mb-3"),
-            dcc.Graph(id="performance-graph", style={"height": "600px"}),
+            dcc.Graph(
+                id="performance-graph",
+                style={"height": "600px"},
+                config={"scrollZoom": True, "displaylogo": False},
+            ),
             html.Div(id="trial-detail-panel", className="my-3"),
 
             # Search-space convergence report — user-triggered (heavy: walks
