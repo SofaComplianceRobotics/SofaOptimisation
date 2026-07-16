@@ -32,6 +32,32 @@ logger = logging.getLogger(__name__)
 
 MANIFEST_NAME = "archive.json"
 
+# Dropped into runtime/ by restore_archive so a later archive_run can default
+# to the run's original name/notes instead of silently losing them (a live run
+# carries no manifest, so the identity would otherwise die on restore).
+RESTORE_MARKER_NAME = ".restored_from.json"
+
+
+def _read_restore_marker(project: SofaOptProject) -> dict:
+    """The restored run's remembered identity ({} when it isn't a restore)."""
+    try:
+        return json.loads(
+            (project.runtime_dir / RESTORE_MARKER_NAME).read_text(encoding="utf-8")
+        )
+    except Exception:
+        return {}
+
+
+def _write_restore_marker(project: SofaOptProject, info: ArchiveInfo) -> None:
+    """Remember a restored run's name/notes for its next archive_run."""
+    if not (info.name or info.notes):
+        return
+    with contextlib.suppress(Exception):  # cosmetic: never fail a restore over this
+        (project.runtime_dir / RESTORE_MARKER_NAME).write_text(
+            json.dumps({"name": info.name, "notes": info.notes}, indent=2),
+            encoding="utf-8",
+        )
+
 
 @dataclass(frozen=True)
 class ArchiveInfo:
@@ -77,11 +103,20 @@ def archive_run(
 ) -> Path:
     """Move the current ``runtime/`` into a named archive and write its manifest.
 
+    ``name``/``notes`` default to the run's remembered identity when it came
+    from :func:`restore_archive` — so restore → re-archive keeps its name and
+    notes instead of silently reverting to a bare timestamp. An explicit
+    argument always wins.
+
     Returns the archive directory. Raises ``FileNotFoundError`` when there is
     no run data to archive.
     """
     if not runtime_has_run_data(project):
         raise FileNotFoundError(f"No run data to archive in {project.runtime_dir}")
+
+    remembered = _read_restore_marker(project)
+    name = name or remembered.get("name", "")
+    notes = notes or remembered.get("notes", "")
 
     stamp = time.strftime("%Y%m%d_%H%M%S")
     slug = f"{stamp}_{_slugify(name)}" if _slugify(name) else stamp
@@ -94,6 +129,9 @@ def archive_run(
     manifest = _build_manifest(project, name=name or slug, notes=notes)
 
     _move_with_retry(project.runtime_dir, dest)
+    # The marker is runtime-only bookkeeping; its identity now lives in the
+    # manifest, so it must not linger inside the archive.
+    (dest / RESTORE_MARKER_NAME).unlink(missing_ok=True)
     (dest / MANIFEST_NAME).write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
@@ -215,17 +253,23 @@ def restore_archive(project: SofaOptProject, archive: str | Path) -> Path:
     """Move an archive back to ``runtime/`` (it becomes the live run again).
 
     Any current run data is auto-archived first, so a restore can never
-    destroy anything. The restored run can then be resumed (its ``study.db``
-    is intact) and re-archived later. Returns the runtime dir.
+    destroy anything — that auto-archive keeps the outgoing run's own name
+    when it is itself a restored run, falling back to ``auto_before_restore``
+    for an unnamed one. The restored run can then be resumed (its ``study.db``
+    is intact) and re-archived later under its original name (see the restore
+    marker). Returns the runtime dir.
     """
     path = _resolve_archive(project, archive)
     if runtime_has_run_data(project):
-        archive_run(project, name="auto_before_restore")
+        outgoing = _read_restore_marker(project).get("name") or "auto_before_restore"
+        archive_run(project, name=outgoing)
     elif project.runtime_dir.exists():
         shutil.rmtree(project.runtime_dir)  # empty scaffold from a fresh start
 
+    info = load_archive_info(path)  # capture identity BEFORE dropping the manifest
     (path / MANIFEST_NAME).unlink(missing_ok=True)  # live runs carry no manifest
-    shutil.move(str(path), str(project.runtime_dir))
+    _move_with_retry(path, project.runtime_dir)
+    _write_restore_marker(project, info)
     logger.info(f"[archive] Restored {path.name} -> {project.runtime_dir}")
     return project.runtime_dir
 
