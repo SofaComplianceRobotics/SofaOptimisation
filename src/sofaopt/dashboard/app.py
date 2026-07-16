@@ -338,4 +338,10 @@ def launch_dashboard(
 
         threading.Thread(target=_open, daemon=True).start()
 
-    app.run(debug=False, use_reloader=False, port=port, host="127.0.0.1")
+    # threaded=True: Werkzeug's dev server otherwise handles one request at a
+    # time. During a heavy run (many trial dirs being written concurrently,
+    # e.g. a large IPOP-restart popsize) a single slow load_trial_records()
+    # rescan could block every other request behind it, including the page's
+    # own polling -- symptomatically "the graph goes blank while the
+    # optimization is running, comes back once it stops."
+    app.run(debug=False, use_reloader=False, port=port, host="127.0.0.1", threaded=True)
