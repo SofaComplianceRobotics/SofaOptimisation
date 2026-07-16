@@ -375,6 +375,11 @@ def _compute_restart_state(study, project, stall: "_StallTracker", fruitless_str
         "fruitless_streak": fruitless_streak,
         "restart_patience": project.restart_patience,
         "run_until_converged": project.run_until_converged,
+        # Whether stall_count is the live restart trigger or just along for the
+        # display ride (see _run's comment above `stalled = stall.should_stop`):
+        # with a convergence trigger active, stall_count can run past
+        # stall_limit indefinitely without ever firing a restart.
+        "convergence_trigger": _use_convergence_trigger(project),
     }
 
 

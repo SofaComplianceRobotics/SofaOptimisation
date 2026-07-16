@@ -182,6 +182,26 @@ def _restart_stat(label: str, value: str, css: str = "text-info") -> html.Div:
     )
 
 
+def _since_improvement_stat(rs: dict):
+    """Patience countdown (both restart phases): generations since last
+    improvement. When a convergence trigger is active, this counter is
+    informational only (see orchestrator._run) -- it does not drive restarts
+    and can run past stall_limit indefinitely, so it must not be shown as a
+    "N / limit" fraction in that mode."""
+    stall_limit = rs.get("stall_limit", 0)
+    if not stall_limit:
+        return None
+    if rs.get("convergence_trigger"):
+        return _restart_stat(
+            "Since improvement (info only)",
+            f"{rs.get('stall_count', 0)} gens · trigger is CMA-ES convergence",
+        )
+    return _restart_stat(
+        "Since improvement",
+        f"{rs.get('stall_count', 0)} / {stall_limit} gens",
+    )
+
+
 def _build_restart_status(events: list[dict], progress: dict | None) -> html.Div:
     """IPOP restart status: the latest restart's values, or — before any
     restart — the stall-patience countdown toward the next one.
@@ -217,15 +237,9 @@ def _build_restart_status(events: list[dict], progress: dict | None) -> html.Div
             _restart_stat("Population", str(rs.get("current_popsize", "—"))),
         ]
 
-    # Patience countdown (both phases): generations since last improvement.
-    stall_limit = rs.get("stall_limit", 0)
-    if stall_limit:
-        cells.append(
-            _restart_stat(
-                "Since improvement",
-                f"{rs.get('stall_count', 0)} / {stall_limit} gens",
-            )
-        )
+    since_improvement = _since_improvement_stat(rs)
+    if since_improvement is not None:
+        cells.append(since_improvement)
     if converged:
         cells.append(
             _restart_stat(

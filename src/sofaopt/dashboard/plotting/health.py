@@ -119,7 +119,11 @@ def _build_general_health(records: list[dict], progress: dict | None) -> html.Di
     rs = (progress or {}).get("restart") or {}
     events = load_restart_events(_ctx.trials_dir())
     cells = [_stat("Score trend", label, css=_TREND_CSS.get(label, "text-muted"))]
-    if rs.get("stall_limit"):
+    if rs.get("stall_limit") and rs.get("convergence_trigger"):
+        # Informational only in this mode -- see panels._build_restart_status.
+        cells.append(_stat("Since improvement (info only)",
+                           f"{rs.get('stall_count', 0)} gens"))
+    elif rs.get("stall_limit"):
         cells.append(_stat("Since improvement",
                            f"{rs.get('stall_count', 0)} / {rs['stall_limit']} gens"))
     if events:
