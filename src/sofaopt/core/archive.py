@@ -91,12 +91,32 @@ def archive_run(
     # Summarize BEFORE the move so a failed summary can't lose data mid-way.
     manifest = _build_manifest(project, name=name or slug, notes=notes)
 
-    shutil.move(str(project.runtime_dir), str(dest))
+    _move_with_retry(project.runtime_dir, dest)
     (dest / MANIFEST_NAME).write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
     logger.info(f"[archive] Run archived -> {dest}")
     return dest
+
+
+def _move_with_retry(src: Path, dest: Path, attempts: int = 5, delay_s: float = 0.4) -> None:
+    """``shutil.move`` with a short retry loop for a transient Windows lock.
+
+    Archiving from the dashboard moves ``runtime/`` while the same process may
+    still be releasing a study.db handle (an in-flight interaction analysis);
+    the analysis path disposes its engine eagerly (see
+    ``analysis._dispose_study_storage``), but a brief retry covers the race
+    and any OS-level lag in freeing the handle, turning a hard WinError 32 into
+    a short wait. Re-raises the last error if the lock never clears."""
+    for i in range(attempts):
+        try:
+            shutil.move(str(src), str(dest))
+            return
+        except (PermissionError, OSError) as exc:
+            if i == attempts - 1:
+                raise
+            logger.info(f"[archive] move blocked (attempt {i + 1}/{attempts}): {exc}; retrying")
+            time.sleep(delay_s)
 
 
 def _build_manifest(project: SofaOptProject, *, name: str, notes: str) -> dict:
