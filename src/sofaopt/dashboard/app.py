@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import socket
 import sys
 import threading
 import time
@@ -186,12 +187,13 @@ def _build_tab_defs(
     tab_defs.append(("Archives", "archives", build_archives_tab()))
 
     tab_defs = [t for t in tab_defs if t[1] not in hidden]
+    return _insert_extra_tabs(tab_defs, extra_tabs)
 
+
+def _insert_extra_tabs(tab_defs: list[tuple], extra_tabs: Sequence[DashboardTab]) -> list[tuple]:
     for tab in extra_tabs:
         entry = (tab.label, tab.value, tab.build())
-        anchor = next(
-            (i for i, t in enumerate(tab_defs) if t[1] == tab.before), None
-        )
+        anchor = next((i for i, t in enumerate(tab_defs) if t[1] == tab.before), None)
         if anchor is None:
             tab_defs.append(entry)
         else:
@@ -238,6 +240,26 @@ def _register_video_routes(app, project) -> None:
         return send_from_directory(str(project.runtime_dir), "summary.mp4")
 
 
+def _check_port_free(host: str, port: int) -> None:
+    """Fail loudly instead of silently serving stale code: a previous
+    dashboard.py instance that was never actually killed can leave the port
+    bound (or, on some Windows setups, appear to let a second process bind it
+    too) -- the browser then talks to whichever process answers first, which
+    may be running yesterday's code with no error anywhere. A live TCP
+    connect attempt catches this regardless of the platform's bind-sharing
+    quirks; checking bind() alone would not."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        if s.connect_ex((host, port)) == 0:
+            raise RuntimeError(
+                f"Port {port} is already answering -- a previous dashboard.py "
+                f"instance is likely still running and would keep serving stale "
+                f"code even after this one starts. Find and stop it first "
+                f"(Windows: `netstat -ano | findstr :{port}`, then "
+                f"`taskkill /PID <pid> /T /F`), or pass a different port."
+            )
+
+
 def launch_dashboard(
     project: SofaOptProject,
     port: int = 8050,
@@ -248,6 +270,7 @@ def launch_dashboard(
     """Start the dashboard web server for ``project``."""
     from sofaopt.core.runtime_dirs import configure_console_logging
 
+    _check_port_free("127.0.0.1", port)
     configure_console_logging()
     for _stream in (sys.stdout, sys.stderr):
         # Non-reconfigurable stream (e.g. pytest capture) — keep the default.
