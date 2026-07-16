@@ -13,6 +13,7 @@ from sofaopt.dashboard.data.cache import (
 )
 from sofaopt.dashboard.plotting.bounds import _build_param_bounds_graph
 from sofaopt.dashboard.plotting.pareto import build_pareto_layout
+from sofaopt.dashboard.plotting.health import build_health_panel
 from sofaopt.dashboard.plotting.performance import (
     _build_leaderboard_html,
     _build_performance_graph,
@@ -87,15 +88,21 @@ def register_monitoring_callbacks(app) -> None:
         return _trial_detail_children(click_data)
 
     @app.callback(
-        [Output("performance-graph", "figure"), Output("leaderboard-table", "children")],
+        [
+            Output("performance-graph", "figure"),
+            Output("leaderboard-table", "children"),
+            Output("optimization-health-panel", "children"),
+        ],
         Input("tabs", "value"),
         Input("performance-interval", "n_intervals"),
     )
     def update_performance(tab, _):
         records, summaries = _load_data()
         if tab != "performance":
-            return go.Figure(), html.Div()
-        return _build_performance_graph(records, summaries), _build_leaderboard_html(records)
+            return go.Figure(), html.Div(), html.Div()
+        progress = _read_json(context.progress_file())
+        health = build_health_panel(records, context.project(), progress)
+        return _build_performance_graph(records, summaries), _build_leaderboard_html(records), health
 
     @app.callback(
         Output("param-bounds-graph", "figure"),

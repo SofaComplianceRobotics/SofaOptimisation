@@ -12,6 +12,7 @@ def build_performance_tab() -> html.Div:
             dcc.Store(id="selected-trial-store", data={}),
 
             html.H3("Performance", className="mb-3"),
+            html.Div(id="optimization-health-panel", className="mb-3"),
             dcc.Graph(id="performance-graph", style={"height": "600px"}),
             html.Div(id="trial-detail-panel", className="my-3"),
 
