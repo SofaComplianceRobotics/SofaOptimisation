@@ -80,6 +80,34 @@ def _single_objective_sampler(project) -> optuna.samplers.BaseSampler:
     return optuna.samplers.RandomSampler()
 
 
+# SQLite's own default busy-wait (5s, via sqlite3.connect's own default) is
+# not enough once a generation's trials finish in a tight burst -- e.g. a
+# large IPOP-restart popsize means many worker processes committing scores/
+# system attrs to the same file within a short window. Observed in practice:
+# a 4-restart FoamBotHex run (popsize grown to 160) died with
+# "sqlite3.OperationalError: database is locked" wrapped in Optuna's own
+# generic StorageInternalError. 60s gives real headroom without masking a
+# genuinely wedged writer forever.
+_SQLITE_BUSY_TIMEOUT_S = 60
+
+
+def _build_storage(db_path: Path) -> optuna.storages.RDBStorage:
+    """RDBStorage tuned for many concurrent SOFA worker processes.
+
+    Two standard SQLite-under-concurrency mitigations, not just a longer
+    wait: WAL journal mode lets readers (the dashboard, an interrupted-run
+    recovery scan) proceed without blocking on a writer and vice versa,
+    which a longer busy-timeout alone does not fix.
+    """
+    storage = optuna.storages.RDBStorage(
+        f"sqlite:///{db_path}",
+        engine_kwargs={"connect_args": {"timeout": _SQLITE_BUSY_TIMEOUT_S}},
+    )
+    with storage.engine.connect() as conn:
+        conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+    return storage
+
+
 def build_study(db_path: Path, cfg: RunConfig, resume: bool = False) -> optuna.Study:
     """Create (or resume) an Optuna study backed by a SQLite database.
 
@@ -99,7 +127,7 @@ def build_study(db_path: Path, cfg: RunConfig, resume: bool = False) -> optuna.S
         logger.info(f"[reset] Deleted {db_path.name}")
 
     project = cfg.project
-    storage = optuna.storages.RDBStorage(f"sqlite:///{db_path}")
+    storage = _build_storage(db_path)
 
     if project.multi_objective:
         return optuna.create_study(
