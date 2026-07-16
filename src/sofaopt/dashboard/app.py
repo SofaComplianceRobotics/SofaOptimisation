@@ -9,12 +9,13 @@ import socket
 import sys
 import threading
 import time
+import uuid
 import webbrowser
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
 try:
-    from dash import Dash, dcc, html
+    from dash import Dash, Input, Output, State, dcc, html
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "The 'dash' package is required for the sofaopt dashboard. "
@@ -104,6 +105,7 @@ def create_app(
     context.set_project(project)
     catalog = context.catalog()
     title = project.title or project.name
+    instance_id = uuid.uuid4().hex[:12]
 
     app = Dash(
         __name__,
@@ -121,6 +123,9 @@ def create_app(
 
     app.layout = html.Div(
         [
+            dcc.Store(id="server-instance-id", data=instance_id),
+            dcc.Interval(id="stale-check-interval", interval=15000, n_intervals=0),
+            html.Div(id="stale-reload-sentinel", style={"display": "none"}),
             html.Header(
                 html.Div(
                     [
@@ -155,6 +160,7 @@ def create_app(
 
     _register_tab_callbacks(app, project, catalog, hidden)
     _register_video_routes(app, project)
+    _register_stale_reload(app, instance_id)
     for tab in extra_tabs:
         if tab.register is not None:
             tab.register(app)
@@ -238,6 +244,48 @@ def _register_video_routes(app, project) -> None:
     @app.server.route("/runtime-summary")
     def serve_runtime_summary():
         return send_from_directory(str(project.runtime_dir), "summary.mp4")
+
+
+def _register_stale_reload(app, instance_id: str) -> None:
+    """Auto-reload a browser tab left open across a dashboard restart.
+
+    ``launch_dashboard`` always runs with ``debug=False`` (see its
+    docstring/call site), so Dash's own "server restarted, please refresh"
+    banner never activates -- that's a devtools-only feature. Without this, a
+    tab open from before a restart silently keeps its stale client state
+    (stale component IDs, stale callback wiring) with no visible sign
+    anything is wrong -- e.g. the Performance graph rendering empty even
+    though the new server's data loads fine. A dashboard restart is routine
+    during development (any sofaopt code change needs one), so this isn't a
+    one-off: poll a tiny endpoint carrying THIS process's instance id and
+    force a reload the moment it stops matching what the page was served
+    with, the same "never silently serve stale state" principle as
+    ``_check_port_free`` below.
+    """
+
+    @app.server.route("/instance-id")
+    def serve_instance_id():
+        return instance_id
+
+    app.clientside_callback(
+        """
+        function(n_intervals, page_instance_id) {
+            if (!page_instance_id) { return window.dash_clientside.no_update; }
+            fetch('/instance-id')
+                .then(r => r.text())
+                .then(function(current) {
+                    if (current && current !== page_instance_id) {
+                        window.location.reload();
+                    }
+                })
+                .catch(function() {});
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output("stale-reload-sentinel", "children"),
+        Input("stale-check-interval", "n_intervals"),
+        State("server-instance-id", "data"),
+    )
 
 
 def _check_port_free(host: str, port: int) -> None:
