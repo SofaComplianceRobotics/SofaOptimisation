@@ -15,8 +15,10 @@ Comparison data derives ONLY from each archive's recorded scores
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import logging
+import os
 import re
 import shutil
 import time
@@ -100,21 +102,39 @@ def archive_run(
 
 
 def _move_with_retry(src: Path, dest: Path, attempts: int = 5, delay_s: float = 0.4) -> None:
-    """``shutil.move`` with a short retry loop for a transient Windows lock.
+    """Move ``runtime/`` into the archive **atomically** — all or nothing.
 
-    Archiving from the dashboard moves ``runtime/`` while the same process may
-    still be releasing a study.db handle (an in-flight interaction analysis);
-    the analysis path disposes its engine eagerly (see
-    ``analysis._dispose_study_storage``), but a brief retry covers the race
-    and any OS-level lag in freeing the handle, turning a hard WinError 32 into
-    a short wait. Re-raises the last error if the lock never clears."""
+    Deliberately ``os.rename``, never ``shutil.move``: shutil.move falls back
+    to copy-then-delete when rename fails, and on Windows a directory rename
+    fails while any file inside is open (SQLite holds study.db without
+    share-delete). That fallback copied the whole run, then raised mid-delete
+    on the locked study.db — stranding a half-moved run: trials in an orphan
+    dir with no manifest (archive_run never reached the manifest write) and
+    study.db left behind in runtime/. Observed for real on 2026-07-16; the run
+    was recoverable but invisible in the Archives tab.
+
+    os.rename moves the entire tree or nothing, so a lock now means a clean,
+    actionable failure with the run untouched. A short retry covers a handle
+    still being released (see ``analysis._dispose_study_storage``).
+    """
     for i in range(attempts):
         try:
-            shutil.move(str(src), str(dest))
+            os.rename(src, dest)
             return
-        except (PermissionError, OSError) as exc:
+        except OSError as exc:
+            if getattr(exc, "errno", None) == errno.EXDEV:
+                # Archives genuinely on another filesystem — rename cannot work
+                # there and copy-then-delete is the only option. Not our layout
+                # (archives/ sits beside runtime/ under work_dir).
+                shutil.move(str(src), str(dest))
+                return
             if i == attempts - 1:
-                raise
+                raise RuntimeError(
+                    f"Could not archive {src.name}: a file inside is still open "
+                    f"(usually study.db — a running optimizer, or the dashboard's "
+                    f"interaction analysis). NOTHING was moved; the run is intact. "
+                    f"Stop the holder and retry. Original error: {exc}"
+                ) from exc
             logger.info(f"[archive] move blocked (attempt {i + 1}/{attempts}): {exc}; retrying")
             time.sleep(delay_s)
 
