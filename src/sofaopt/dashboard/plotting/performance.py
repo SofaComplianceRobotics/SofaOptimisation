@@ -17,6 +17,22 @@ from .traces import (
 logger = logging.getLogger(__name__)
 
 
+# With 1000+ trials, showing the whole history by default makes individual
+# bars too thin to click. Default to the most recent window; the range-
+# slider below still gives access to the full history to scrub/zoom into
+# any candidate. uirevision on the figure (below) means this initial range
+# only applies on first render -- it won't fight the user's own zoom/pan on
+# later polling refreshes.
+_DEFAULT_VISIBLE_TRIALS = 200
+
+
+def _default_xaxis_view(xs: list) -> dict:
+    axis: dict = {"rangeslider": {"visible": True}}
+    if xs and len(xs) > _DEFAULT_VISIBLE_TRIALS:
+        axis["range"] = [xs[-_DEFAULT_VISIBLE_TRIALS], xs[-1] + 1]
+    return axis
+
+
 def _build_performance_graph(records: list[dict], summaries: list[dict]) -> go.Figure:
     """Plotly figure: per-test contributions + score trends over trials."""
     if not records:
@@ -40,7 +56,6 @@ def _build_performance_graph(records: list[dict], summaries: list[dict]) -> go.F
         fig = go.Figure(data=all_traces)
         fig.update_layout(
             title="Performance Overview: Per-Test Contributions & Score Trends",
-            xaxis_title="Trial",
             yaxis_title="Score / Contribution",
             barmode="relative",
             hovermode="x unified",
@@ -49,6 +64,7 @@ def _build_performance_graph(records: list[dict], summaries: list[dict]) -> go.F
             plot_bgcolor=C_BG,
             paper_bgcolor=C_BG,
             uirevision="performance-graph",
+            xaxis={"title": "Trial", **_default_xaxis_view(xs)},
         )
         # Cosmetic animation only; transition support varies across plotly versions.
         with contextlib.suppress(Exception):
@@ -85,6 +101,26 @@ def _add_restart_markers(fig: go.Figure) -> None:
             )
 
 
+# (gen_name, trial_name) -> True, once a trial.mp4 is confirmed to exist.
+# Only positive results are cached -- a video that doesn't exist yet may
+# still appear later, so those keep getting re-checked, but the set that
+# already has one (which only grows) never pays another filesystem stat.
+# Without this, _build_video_markers was one os.stat() per trial on every
+# graph redraw -- fine at dozens of trials, a real cost at 1000+ and worse
+# under concurrent write load from the optimizer's own worker processes.
+_video_exists_cache: dict[tuple[str, str], bool] = {}
+
+
+def _has_video(trials_dir, gen_name: str, trial_name: str) -> bool:
+    key = (gen_name, trial_name)
+    if _video_exists_cache.get(key):
+        return True
+    exists = (trials_dir / gen_name / trial_name / "trial.mp4").exists()
+    if exists:
+        _video_exists_cache[key] = True
+    return exists
+
+
 def _build_video_markers(records: list[dict], plot_data: dict) -> list:
     """Scatter trace marking trials that have a cached trial.mp4 recording."""
     try:
@@ -95,8 +131,7 @@ def _build_video_markers(records: list[dict], plot_data: dict) -> list:
         for i, r in enumerate(records):
             if i >= len(xs):
                 break
-            mp4 = trials_dir / r.get("gen_name", "") / r.get("trial_name", "") / "trial.mp4"
-            if mp4.exists():
+            if _has_video(trials_dir, r.get("gen_name", ""), r.get("trial_name", "")):
                 video_xs.append(xs[i])
                 video_ys.append(final_scores[i])
         if not video_xs:

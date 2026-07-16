@@ -1,18 +1,36 @@
 """Optimization Health panel — pruning readiness + general run-health summary.
 
-Recomputed from the CURRENT study's on-disk state every call (no cached
-verdict) — so if the objective changes later (more targets, more tests), the
-recommendation adapts on the next dashboard refresh instead of quoting a
-stale assessment.
+Reflects the study's on-disk state on a short TTL (see ``_PRUNING_CACHE_TTL_S``)
+rather than every call -- so if the objective changes later (more targets, more
+tests), the recommendation still adapts within moments, not a stale-forever
+verdict, but pruning_trace.analyze() (a full glob + read + parse of every
+score_trace_run*.json under trials_dir) doesn't re-run on every fast poll
+tick once a study has hundreds/thousands of trials.
 """
 
 from __future__ import annotations
+
+import time
 
 from dash import html
 
 from sofaopt import pruning_trace
 from sofaopt.core.restart_events import load_restart_events
 from sofaopt.dashboard import context as _ctx
+
+_PRUNING_CACHE_TTL_S = 20.0
+_pruning_cache: dict = {"trials_dir": None, "report": None, "last_load": 0.0}
+
+
+def _cached_pruning_report(trials_dir):
+    now = time.time()
+    fresh = (now - _pruning_cache["last_load"]) < _PRUNING_CACHE_TTL_S
+    if _pruning_cache["trials_dir"] == trials_dir and fresh:
+        return _pruning_cache["report"]
+    report = pruning_trace.analyze(trials_dir)
+    _pruning_cache.update(trials_dir=trials_dir, report=report, last_load=now)
+    return report
+
 
 # Recommendation thresholds. Calibrated against two real campaigns, not a
 # formula: sofaopt's own reference platforms (trunk/liver, docs/design/
@@ -60,7 +78,7 @@ def _pruning_recommendation(report: dict, prune_mode: str) -> tuple[str, str, st
 
 
 def _build_pruning_health(project) -> html.Div:
-    report = pruning_trace.analyze(_ctx.trials_dir())
+    report = _cached_pruning_report(_ctx.trials_dir())
     if report is None:
         body = html.Div(
             "No score_trace_run*.json found for this study — set OPT_SCORE_TRACE=1 "
