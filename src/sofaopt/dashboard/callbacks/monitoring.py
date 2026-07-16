@@ -18,6 +18,7 @@ from sofaopt.dashboard.plotting.performance import (
     _build_leaderboard_html,
     _build_performance_graph,
 )
+from sofaopt.dashboard.plotting.search_space import build_search_space_report
 from sofaopt.core.restart_events import load_restart_events
 from sofaopt.dashboard.ui.progress import (
     _build_progress_grid,
@@ -110,6 +111,17 @@ def register_monitoring_callbacks(app) -> None:
     )
     def update_bounds(_):
         return _build_param_bounds_graph(show_heatmap=True)
+
+    @app.callback(
+        Output("search-space-report-panel", "children"),
+        Input("search-space-report-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def on_generate_report(n_clicks):
+        if not n_clicks:
+            return html.Div()
+        records, _summaries = _load_data()
+        return build_search_space_report(records)
 
     @app.callback(
         [
