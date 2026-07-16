@@ -64,6 +64,13 @@ def _archives_table(infos) -> html.Div:
                     html.Td(
                         [
                             html.Button(
+                                "Report",
+                                id={"type": "archive-report", "name": key},
+                                n_clicks=0,
+                                className="btn btn-sm btn-outline-primary me-2",
+                                title="Regenerate the search-space report from this archive's trials",
+                            ),
+                            html.Button(
                                 "Restore",
                                 id={"type": "archive-restore", "name": key},
                                 n_clicks=0,
@@ -167,7 +174,56 @@ def _summary_children(entries) -> list:
         html.H6("Summary"),
         html.Table([head, body], className="table table-sm"),
         *_convergence_table(entries),
+        *_same_case_section(entries),
         *_params_diff_table(entries),
+    ]
+
+
+def _same_case(entries) -> bool:
+    """True when all compared runs share one problem (param space + tests)."""
+    return len(entries) > 1 and len({e.get("case_signature") for e in entries}) == 1
+
+
+def _same_case_section(entries) -> list:
+    """In-depth per-parameter comparison when runs are the same case; a
+    'different problems' caution otherwise (so the best-params diff below is
+    read with the right skepticism)."""
+    if _same_case(entries):
+        return _final_population_table(entries)
+    if len(entries) > 1:
+        return [
+            html.Div(
+                "Runs are on different problems (parameter space or tests differ) — "
+                "the per-parameter comparison below is indicative only.",
+                className="text-warning small mt-2",
+            )
+        ]
+    return []
+
+
+def _final_population_table(entries) -> list:
+    """Per searched param: each run's FINAL-generation population (mean±std) —
+    where the search settled per knob, beyond just its single best point."""
+    param_names: list[str] = []
+    for e in entries:
+        for name in (e.get("summary_stats") or {}).get("final_param_stats", {}):
+            if name not in param_names:
+                param_names.append(name)
+    if not param_names:
+        return []
+    head = html.Thead(
+        html.Tr([html.Th("Param (final pop.)")] + [html.Th(e["label"]) for e in entries])
+    )
+    rows = []
+    for name in param_names:
+        cells = []
+        for e in entries:
+            st = (e.get("summary_stats") or {}).get("final_param_stats", {}).get(name)
+            cells.append(html.Td(f"{st['mean']:.4g}±{st['std']:.3g}" if st else "-", className="text-end"))
+        rows.append(html.Tr([html.Td(name, className="fw-semibold")] + cells))
+    return [
+        html.H6("Per-parameter final population (same case)", className="mt-3"),
+        html.Table([head, html.Tbody(rows)], className="table table-sm"),
     ]
 
 
@@ -249,6 +305,38 @@ def _do_delete(key, dirty):
         return html.Span(f"Delete failed: {exc}", className="text-danger"), dirty
 
 
+def _triggered_key(n_clicks_list) -> str:
+    """The pattern-matched id's ``name`` for the just-clicked row button, or
+    ``PreventUpdate`` when nothing actually fired (shared guard for the
+    restore/delete/report row callbacks)."""
+    if not ctx.triggered_id or not any(n_clicks_list):
+        raise PreventUpdate
+    return ctx.triggered_id["name"]
+
+
+def _do_archive_report(key):
+    """Regenerate the search-space report from one archive's own trials + its
+    snapshot's parameter space (heavy — user-triggered, same pattern as the
+    live Performance-tab report)."""
+    from sofaopt.core.results import load_trial_records
+    from sofaopt.dashboard.plotting.search_space import (
+        build_search_space_report,
+        specs_from_snapshot,
+    )
+
+    info = next((i for i in list_archives(context.project()) if i.path.name == key), None)
+    if info is None:
+        return html.Div("Archive not found.", className="text-danger")
+    records = load_trial_records(info.trials_dir)
+    specs = specs_from_snapshot(info.project_snapshot) or None
+    return html.Div(
+        [
+            html.H5(f"Search-space report — {info.name}", className="mt-3"),
+            build_search_space_report(records, specs),
+        ]
+    )
+
+
 def _do_compare(selected):
     project = context.project()
     archive_keys = [v for v in selected if v != _CURRENT]
@@ -294,9 +382,7 @@ def register_archives_callbacks(app) -> None:  # noqa: C901  # Dash registrar: c
         prevent_initial_call=True,
     )
     def restore_clicked(n_clicks_list, dirty):
-        if not ctx.triggered_id or not any(n_clicks_list):
-            raise PreventUpdate
-        return _do_restore(ctx.triggered_id["name"], dirty)
+        return _do_restore(_triggered_key(n_clicks_list), dirty)
 
     @app.callback(
         Output("archive-delete-confirm", "displayed"),
@@ -305,9 +391,15 @@ def register_archives_callbacks(app) -> None:  # noqa: C901  # Dash registrar: c
         prevent_initial_call=True,
     )
     def delete_clicked(n_clicks_list):
-        if not ctx.triggered_id or not any(n_clicks_list):
-            raise PreventUpdate
-        return True, ctx.triggered_id["name"]
+        return True, _triggered_key(n_clicks_list)
+
+    @app.callback(
+        Output("archive-report-panel", "children"),
+        Input({"type": "archive-report", "name": ALL}, "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def show_archive_report(n_clicks_list):
+        return _do_archive_report(_triggered_key(n_clicks_list))
 
     @app.callback(
         Output("archive-action-status", "children", allow_duplicate=True),

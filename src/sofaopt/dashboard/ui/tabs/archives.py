@@ -44,7 +44,10 @@ def build_archives_tab() -> html.Div:
             ),
 
             # -- archive list --------------------------------------------------
-            html.Div(id="archives-table", className="mb-4"),
+            html.Div(id="archives-table", className="mb-2"),
+
+            # -- per-archive search-space report (on demand) -------------------
+            html.Div(id="archive-report-panel", className="mb-4"),
 
             # -- comparison ----------------------------------------------------
             html.H5("Compare runs", className="mb-2"),

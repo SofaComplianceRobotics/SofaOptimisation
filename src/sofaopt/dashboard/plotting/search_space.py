@@ -27,6 +27,22 @@ def _active_specs() -> list[dict]:
     return [p.to_dict() for p in context.project().params if not p.is_frozen]
 
 
+def specs_from_snapshot(snapshot: dict) -> list[dict]:
+    """Searchable param specs (name/min/max) from an archived project snapshot.
+
+    A snapshot stores each ParamSpec's raw fields (``low``/``high``, not
+    ``min``/``max``); this converts to the report's expected shape and drops
+    frozen params (``low == high``) — so the report works off an archive's own
+    parameter space, not the currently-loaded project's.
+    """
+    out = []
+    for p in snapshot.get("params", []):
+        low, high = p.get("low"), p.get("high")
+        if isinstance(low, (int, float)) and isinstance(high, (int, float)) and low != high:
+            out.append({"name": p.get("name"), "type": p.get("type"), "min": low, "max": high})
+    return out
+
+
 def _usable_records(records: list[dict]) -> list[dict]:
     return [
         r for r in records
@@ -207,16 +223,21 @@ def _correlation_figure(corr: dict[str, float]) -> go.Figure:
     return fig
 
 
-def build_search_space_report(records: list[dict]):
+def build_search_space_report(records: list[dict], specs: list[dict] | None = None):
     """Full report as a Dash ``html.Div``: convergence curve, per-parameter
     funnel, top-2 search-space map, and a linear correlation screen. Returns
     an explanatory error panel instead of raising if there isn't enough data
     yet -- this is user-triggered, so a clear "not ready" beats a stack trace.
+
+    ``specs`` (name/min/max dicts) defaults to the live project's searched
+    params; pass an archive's :func:`specs_from_snapshot` to report on an
+    archived run's own parameter space.
     """
     from dash import dcc, html
 
     usable = _usable_records(records)
-    specs = _active_specs()
+    if specs is None:
+        specs = _active_specs()
     if len(usable) < 10 or not specs:
         return html.Div(
             f"Not enough completed trials yet for a search-space report "

@@ -202,12 +202,15 @@ def _pop_std(values: list[float]) -> float:
 
 
 def _numeric_param_names(completed: list[dict]) -> list[str]:
-    names: list[str] = []
+    """Numeric params that actually VARIED across the run — the searched
+    dimensions. Constants (frozen params, fixed knobs) are excluded so they
+    never clutter a per-param view or skew a diversity aggregate."""
+    seen: dict[str, set] = {}
     for r in completed:
         for key, val in (r.get("params") or {}).items():
-            if isinstance(val, (int, float)) and key not in names:
-                names.append(key)
-    return names
+            if isinstance(val, (int, float)):
+                seen.setdefault(key, set()).add(val)
+    return [k for k, vals in seen.items() if len(vals) > 1]
 
 
 def _param_values(records: list[dict], name: str) -> list[float]:
@@ -242,6 +245,24 @@ def _diversity_collapse_pct(completed: list[dict], k_gens: int = 5) -> float | N
     return round(100.0 * sum(collapses) / len(collapses), 1)
 
 
+def _final_param_stats(completed: list[dict]) -> dict:
+    """Per searched (varying) numeric param: the FINAL generation's population
+    mean and std — where each run's search actually settled per parameter, not
+    just its single best point. Powers the same-case in-depth comparison."""
+    by_gen: dict[int, list[dict]] = {}
+    for r in completed:
+        by_gen.setdefault(r.get("gen_index", 0), []).append(r)
+    if not by_gen:
+        return {}
+    finals = by_gen[max(by_gen)]
+    out: dict[str, dict] = {}
+    for name in _numeric_param_names(completed):
+        vals = _param_values(finals, name)
+        if vals:
+            out[name] = {"mean": round(sum(vals) / len(vals), 3), "std": round(_pop_std(vals), 3)}
+    return out
+
+
 def _trials_to_fraction(completed: list[dict], best: float, frac: float) -> int | None:
     """First evaluation (1-based chron) reaching ``frac`` of the eventual best
     — a convergence-speed proxy. ``None`` when best is non-positive (the
@@ -257,7 +278,7 @@ def _trials_to_fraction(completed: list[dict], best: float, frac: float) -> int 
 
 # Bump when run_summary_stats's schema changes so stored manifests recompute
 # instead of showing stale/absent fields (see _ensure_summary_stats).
-_STATS_VERSION = 1
+_STATS_VERSION = 2
 
 
 def run_summary_stats(trials_dir: Path, *, records: list[dict] | None = None) -> dict:
@@ -294,6 +315,7 @@ def run_summary_stats(trials_dir: Path, *, records: list[dict] | None = None) ->
         "final_std": round(_pop_std(final_scores), 3),
         "trials_to_90pct_best": _trials_to_fraction(completed, best, 0.9),
         "diversity_collapse_pct": _diversity_collapse_pct(completed),
+        "final_param_stats": _final_param_stats(completed),
         "n_restarts": len(load_restart_events(trials_dir)),
     }
 
@@ -323,6 +345,22 @@ def best_so_far_curve(trials_dir: Path) -> tuple[list[int], list[float]]:
             xs.append(r["chron"] + 1)
             ys.append(best)
     return xs, ys
+
+
+def case_signature(snapshot: dict, test_names: list[str]) -> tuple:
+    """A run's 'problem identity': its searched parameter space + test set.
+
+    Two runs share a case when this matches — only then is a per-parameter
+    comparison meaningful (same knobs, same objective). Frozen params
+    (``low == high``) are excluded so freezing an unused knob doesn't split
+    otherwise-identical cases.
+    """
+    params = tuple(sorted(
+        (p.get("name"), p.get("type"), p.get("low"), p.get("high"))
+        for p in snapshot.get("params", [])
+        if p.get("low") != p.get("high")
+    ))
+    return (params, tuple(sorted(test_names)))
 
 
 def _ensure_summary_stats(path: Path, info: ArchiveInfo) -> dict:
@@ -372,6 +410,7 @@ def comparison_data(
                 "info": info,
                 "restarts": load_restart_events(info.trials_dir),
                 "summary_stats": _ensure_summary_stats(path, info),
+                "case_signature": case_signature(info.project_snapshot, info.test_names),
             }
         )
     if include_current and runtime_has_run_data(project):
@@ -390,6 +429,9 @@ def comparison_data(
                 "info": None,
                 "restarts": load_restart_events(project.trials_dir),
                 "summary_stats": run_summary_stats(project.trials_dir, records=records),
+                "case_signature": case_signature(
+                    project_to_jsonable(project), [t.name for t in project.tests]
+                ),
             }
         )
     return entries
