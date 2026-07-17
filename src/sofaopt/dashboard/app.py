@@ -176,8 +176,8 @@ def _build_tab_defs(
     tab_defs += [
         ("Run", "run", build_run_tab(catalog)),
         ("Monitor", "monitor", build_progress_tab()),
-        ("Results", "results", build_performance_tab()),
         ("Parameters", "parameters", build_parameters_tab()),
+        ("Results", "results", build_performance_tab()),
     ]
     # The Parameters tab drops its importance/interaction section in Pareto mode;
     # the Pareto front takes its place.

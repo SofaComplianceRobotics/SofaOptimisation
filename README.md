@@ -152,7 +152,7 @@ At the end of the run a summary video is generated from the top+bottom trials.
 launch_dashboard(PROJECT, port=8050)
 ```
 
-The web UI tabs are **Run · Monitor · Results · Parameters · (Pareto) · Archives**:
+The web UI tabs are **Run · Monitor · Parameters · Results · (Pareto) · Archives**:
 
 - **Run** — the single place to launch work. Lists the project's tests once;
   each row has a **Preview** button (opens that scene in an interactive
@@ -164,13 +164,13 @@ The web UI tabs are **Run · Monitor · Results · Parameters · (Pareto) · Arc
   rankings), and a shared **log window** with an All / Warnings / Errors filter that
   tails the run — including one started from the `sofaopt` CLI.
 - **Monitor** — live per-generation trial grid, restart status, jump-to-running.
+- **Parameters** — a table of every parameter (including *frozen* ones), the
+  sampled-value bounds heatmap, and (single-objective) fANOVA importance +
+  interaction map.
 - **Results** — score-over-trials graph (click a point to select a trial), a
   per-trial detail panel with **"Test it"** (re-launch that trial's params in a
   viewer) and **"View recording"** / **"Generate Summary"** video controls, the
   live leaderboard, and the optimization-health panel.
-- **Parameters** — a table of every parameter (including *frozen* ones), the
-  sampled-value bounds heatmap, and (single-objective) fANOVA importance +
-  interaction map.
 - **Archives** — archive the current run (with a name and notes), restore or
   delete archives, and **compare runs**: overlaid best-so-far convergence curves
   plus a summary and best-params diff table.
