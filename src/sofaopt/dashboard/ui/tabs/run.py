@@ -1,9 +1,16 @@
-"""Optimise tab — test selection, weight management, sampler choice, Run/Stop."""
+"""Run tab — one place to launch work on the project's tests.
+
+Merges the former Scenes and Optimise tabs: the test catalog is listed once;
+each row carries a Preview button (opens that scene in an interactive runSofa
+window), a Gate toggle, and a weight slider. Below sit the optimizer settings,
+Start/Pause, and a shared log window that tails the run — whether this dashboard
+launched it or a ``sofaopt`` CLI run did.
+"""
 
 from dash import dcc, html
 
 from sofaopt.dashboard import context
-from .styles import LOG_STYLE
+from sofaopt.dashboard.ui.components import build_log_view
 
 PIE_PALETTE = [
     "#4c8bf5",
@@ -31,7 +38,7 @@ def _build_sampler_controls() -> html.Div:
 
     Defaults are read from the project; the values are forwarded as ``OPT_*``
     env overrides when the Run button launches the headless study, so the UI
-    drives the same knobs as the ``run.py`` CLI flags.
+    drives the same knobs as the ``sofaopt`` CLI flags.
     """
     project = context.project()
     return html.Div(
@@ -130,8 +137,53 @@ def _build_sampler_controls() -> html.Div:
     )
 
 
-def build_optimise_tab(catalog: dict) -> html.Div:
-    """Build the Optimise tab from the project's test catalog."""
+def _test_row(name: str, spec, pre_selected: bool, weight: int) -> html.Div:
+    """One catalog row: Preview · select · gate · weight."""
+    return html.Div(
+        [
+            html.Button(
+                "👁 Preview",
+                id={"type": "scene-preview", "test": name},
+                n_clicks=0,
+                className="btn btn-outline-secondary btn-sm me-2",
+                style={"flexShrink": 0, "whiteSpace": "nowrap"},
+                title="Open this scene in an interactive SOFA viewer",
+            ),
+            dcc.Checklist(
+                id={"type": "test-check", "test": name},
+                options=[{"label": f" {spec.label}", "value": name}],
+                value=[name] if pre_selected else [],
+                style={"display": "inline-flex", "alignItems": "center", "minWidth": "200px", "flexShrink": 0},
+                className="me-2",
+            ),
+            dcc.Checklist(
+                id={"type": "gate-check", "test": name},
+                options=[{"label": " Gate", "value": name}],
+                value=[],
+                style={"display": "inline-flex", "alignItems": "center", "minWidth": "90px", "flexShrink": 0},
+                className="me-2 text-muted",
+            ),
+            html.Div(
+                dcc.Slider(
+                    id={"type": "weight-slider", "test": name},
+                    min=0,
+                    max=100,
+                    step=1,
+                    value=weight,
+                    marks=None,
+                    tooltip={"placement": "bottom", "always_visible": True},
+                    updatemode="drag",
+                ),
+                style={"flexGrow": 1},
+            ),
+        ],
+        className="d-flex align-items-center mb-3",
+        style={"gap": "8px"},
+    )
+
+
+def build_run_tab(catalog: dict) -> html.Div:
+    """Build the Run tab from the project's test catalog."""
     names = list(catalog.keys())
     any_default = any(spec.default_selected for spec in catalog.values())
 
@@ -148,57 +200,28 @@ def build_optimise_tab(catalog: dict) -> html.Div:
         else:
             initial_store[name] = 0
 
-    test_rows = []
-    for name, spec in catalog.items():
-        pre_selected = spec.default_selected or not any_default
-        test_rows.append(
-            html.Div(
-                [
-                    dcc.Checklist(
-                        id={"type": "test-check", "test": name},
-                        options=[{"label": f" {spec.label}", "value": name}],
-                        value=[name] if pre_selected else [],
-                        style={"display": "inline-flex", "alignItems": "center", "minWidth": "200px", "flexShrink": 0},
-                        className="me-2",
-                    ),
-                    dcc.Checklist(
-                        id={"type": "gate-check", "test": name},
-                        options=[{"label": " Gate", "value": name}],
-                        value=[],
-                        style={"display": "inline-flex", "alignItems": "center", "minWidth": "90px", "flexShrink": 0},
-                        className="me-2 text-muted",
-                    ),
-                    html.Div(
-                        dcc.Slider(
-                            id={"type": "weight-slider", "test": name},
-                            min=0,
-                            max=100,
-                            step=1,
-                            value=initial_store[name],
-                            marks=None,
-                            tooltip={"placement": "bottom", "always_visible": True},
-                            updatemode="drag",
-                        ),
-                        style={"flexGrow": 1},
-                    ),
-                ],
-                className="d-flex align-items-center mb-3",
-                style={"gap": "8px"},
-            )
+    test_rows = [
+        _test_row(
+            name, spec,
+            pre_selected=(spec.default_selected or not any_default),
+            weight=initial_store[name],
         )
+        for name, spec in catalog.items()
+    ]
 
     return html.Div(
         [
-            html.H3("Optimisation", className="mb-2"),
+            html.H3("Run", className="mb-2"),
             _build_sampler_controls(),
             dcc.Store(id="opt-weights-store", data=initial_store),
             html.Div(
                 [
                     html.Div(
                         [
-                            html.P("Drag a slider — the others adjust so the total stays at 100%.", className="text-muted mb-3"),
+                            html.P("Preview opens a scene in an interactive SOFA window; drag a slider — the others adjust so the total stays at 100%.", className="text-muted mb-2"),
                             html.P("Use Gate to delay a test until one of the ungated tests succeeds.", className="text-muted mb-3"),
                             html.Div(test_rows, className="mb-2"),
+                            html.Div(id="run-scene-status", className="mb-2 small"),
                             html.Div(
                                 [
                                     html.Button("Equal split", id="opt-equal-btn", n_clicks=0, className="btn btn-outline-secondary btn-sm me-2"),
@@ -225,8 +248,7 @@ def build_optimise_tab(catalog: dict) -> html.Div:
                 className="mb-3",
             ),
             html.Div(id="opt-status", className="mb-2 fw-semibold"),
-            html.Pre(id="opt-log", style=LOG_STYLE),
-            dcc.Interval(id="opt-interval", interval=1000, n_intervals=0),
+            build_log_view(pre_id="run-log", interval_id="opt-interval", filter_id="run-log-filter"),
         ],
         className="p-3",
     )

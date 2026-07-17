@@ -1,4 +1,9 @@
-"""Callbacks for the Optimise tab: weight sliders, pie, Run/Stop, log."""
+"""Callbacks for the Run tab: scene preview, weight sliders, pie, Run/Pause, log.
+
+Merges the former Optimise and Scenes callbacks. The optimizer machinery keeps
+its ``opt-*`` component ids so the (id-coupled) clientside weight callbacks port
+over verbatim; the newly added pieces use ``run-*`` ids.
+"""
 
 from __future__ import annotations
 
@@ -6,15 +11,19 @@ import json
 import os
 
 from dash import ALL, Input, Output, State, ctx
+from dash.exceptions import PreventUpdate
 
 from sofaopt.core import envkeys
 from sofaopt.dashboard import context
 from sofaopt.dashboard.process.process_manager import (
     _read_proc_log,
+    external_run_pid,
+    launch_scene,
     optimize_running,
     start_optimize,
     stop_optimize,
 )
+from sofaopt.dashboard.ui.components import register_log_view
 
 
 def _selected_tests(check_vals, check_ids, store) -> tuple[list[str], dict[str, int]]:
@@ -60,7 +69,6 @@ def _converged_error(sampler, run_until_converged, restart_patience) -> str | No
         return "'Run until converged' needs the CMA-ES sampler."
     if int(restart_patience or 0) < 1:
         return "'Run until converged' needs restart patience >= 1."
-    from sofaopt.dashboard import context
     project = context.project()
     if project.cmaes_restarts <= 0 or project.stall_generations <= 0:
         return (
@@ -100,11 +108,7 @@ def _optimizer_env(
     return env
 
 
-def register_optimise_callbacks(app) -> None:
-    """Register weight-store, slider/pie sync, and run/stop callbacks."""
-
-    app.clientside_callback(
-        """
+_WEIGHT_SYNC_JS = """
         function(slider_vals, check_vals, eq_clicks, norm_clicks, slider_ids, store) {
             var NO_UPDATE = window.dash_clientside.no_update;
             var ctx = window.dash_clientside.callback_context;
@@ -182,31 +186,16 @@ def register_optimise_callbacks(app) -> None:
             }
             return NO_UPDATE;
         }
-        """,
-        Output("opt-weights-store", "data"),
-        Input({"type": "weight-slider", "test": ALL}, "value"),
-        Input({"type": "test-check", "test": ALL}, "value"),
-        Input("opt-equal-btn", "n_clicks"),
-        Input("opt-normalize-btn", "n_clicks"),
-        State({"type": "weight-slider", "test": ALL}, "id"),
-        State("opt-weights-store", "data"),
-        prevent_initial_call=True,
-    )
-
-    app.clientside_callback(
         """
+
+_SLIDER_MIRROR_JS = """
         function(store, slider_ids) {
             if (!store) return slider_ids.map(function() { return 0; });
             return slider_ids.map(function(sid) { return store[sid.test] || 0; });
         }
-        """,
-        Output({"type": "weight-slider", "test": ALL}, "value"),
-        Input("opt-weights-store", "data"),
-        State({"type": "weight-slider", "test": ALL}, "id"),
-    )
-
-    app.clientside_callback(
         """
+
+_PIE_JS = """
         function(store, slider_ids, check_vals) {
             var palette = ["#4c8bf5","#e84393","#34a853","#fa7b17","#9c27b0","#00bcd4","#ff5722","#8bc34a"];
             store = store || {};
@@ -223,15 +212,9 @@ def register_optimise_callbacks(app) -> None:
             }
             return {data: [{type: 'pie', labels: labels, values: values, marker: {colors: colors}, textinfo: 'label+percent', hovertemplate: '%{label}: %{value}%<extra></extra>', hole: 0.35}], layout: layout};
         }
-        """,
-        Output("opt-pie", "figure"),
-        Input("opt-weights-store", "data"),
-        State({"type": "weight-slider", "test": ALL}, "id"),
-        State({"type": "test-check", "test": ALL}, "value"),
-    )
-
-    app.clientside_callback(
         """
+
+_WEIGHT_STATUS_JS = """
         function(store, check_vals, slider_ids) {
             store = store || {};
             var selected_count = check_vals.filter(function(v) { return v && v.length > 0; }).length;
@@ -242,12 +225,112 @@ def register_optimise_callbacks(app) -> None:
             if (total !== 100) return mk('Selected weights sum to ' + total + '% — must equal 100%.', 'text-danger fw-semibold');
             return mk(selected_count + ' test(s) selected · weights OK (total 100%).', 'text-success fw-semibold');
         }
-        """,
+        """
+
+
+def _do_scene_preview() -> str:
+    """Launch the clicked row's scene in an interactive viewer (Run tab)."""
+    tid = ctx.triggered_id
+    if not isinstance(tid, dict) or tid.get("type") != "scene-preview":
+        raise PreventUpdate
+    name = tid["test"]
+    try:
+        spec = context.project().test(name)
+    except KeyError:
+        return f"Unknown test '{name}'."
+    return launch_scene(spec.scene_file)
+
+
+def _do_run_or_pause(
+    check_vals, check_ids, gate_vals, gate_ids, store,
+    sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
+    run_until_converged, restart_patience,
+) -> str:
+    """Start/Resume (validate + launch) or Pause, per the triggering button."""
+    if ctx.triggered_id == "opt-stop-btn":
+        return stop_optimize()
+
+    store = store or {}
+    test_names, test_weights = _selected_tests(check_vals, check_ids, store)
+    gated_names = [
+        cid["test"]
+        for checks, cid in zip(gate_vals, gate_ids, strict=True)
+        if checks and cid["test"] in test_names
+    ]
+    error = _selection_error(
+        test_names, gated_names, test_weights, sampler, n_parallel,
+        run_until_converged, restart_patience,
+    )
+    if error:
+        return error
+    return start_optimize(_optimizer_env(
+        test_names, test_weights, gated_names,
+        sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
+        run_until_converged, restart_patience,
+    ))
+
+
+def _current_button_state() -> tuple[str, bool, str, bool]:
+    """(start label, start disabled, pause label, pause disabled) for the live
+    run state — including a run started outside the dashboard (holds the study
+    lock but is not ours to pause)."""
+    if external_run_pid() is not None:
+        return "Running outside dashboard", True, "Pause", True
+    if optimize_running():
+        return "Optimising…", True, "Pause", False
+    try:
+        has_study = context.project().db_path.exists()
+    except Exception:
+        has_study = False
+    start_label = "Resume Optimisation" if has_study else "Start Optimisation"
+    return start_label, False, "Pause", True
+
+
+def register_run_callbacks(app) -> None:
+    """Register weight-store, slider/pie sync, scene preview, run/pause, log."""
+
+    app.clientside_callback(
+        _WEIGHT_SYNC_JS,
+        Output("opt-weights-store", "data"),
+        Input({"type": "weight-slider", "test": ALL}, "value"),
+        Input({"type": "test-check", "test": ALL}, "value"),
+        Input("opt-equal-btn", "n_clicks"),
+        Input("opt-normalize-btn", "n_clicks"),
+        State({"type": "weight-slider", "test": ALL}, "id"),
+        State("opt-weights-store", "data"),
+        prevent_initial_call=True,
+    )
+
+    app.clientside_callback(
+        _SLIDER_MIRROR_JS,
+        Output({"type": "weight-slider", "test": ALL}, "value"),
+        Input("opt-weights-store", "data"),
+        State({"type": "weight-slider", "test": ALL}, "id"),
+    )
+
+    app.clientside_callback(
+        _PIE_JS,
+        Output("opt-pie", "figure"),
+        Input("opt-weights-store", "data"),
+        State({"type": "weight-slider", "test": ALL}, "id"),
+        State({"type": "test-check", "test": ALL}, "value"),
+    )
+
+    app.clientside_callback(
+        _WEIGHT_STATUS_JS,
         Output("opt-weight-status", "children"),
         Input("opt-weights-store", "data"),
         Input({"type": "test-check", "test": ALL}, "value"),
         State({"type": "weight-slider", "test": ALL}, "id"),
     )
+
+    @app.callback(
+        Output("run-scene-status", "children"),
+        Input({"type": "scene-preview", "test": ALL}, "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def handle_preview(_n_clicks):
+        return _do_scene_preview()
 
     @app.callback(
         Output("opt-status", "children"),
@@ -272,49 +355,26 @@ def register_optimise_callbacks(app) -> None:
         sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
         run_until_converged, restart_patience,
     ):
-        if ctx.triggered_id == "opt-stop-btn":
-            return stop_optimize()
-
-        store = store or {}
-        test_names, test_weights = _selected_tests(check_vals, check_ids, store)
-        gated_names = [
-            cid["test"]
-            for checks, cid in zip(gate_vals, gate_ids, strict=True)
-            if checks and cid["test"] in test_names
-        ]
-
-        error = _selection_error(
-            test_names, gated_names, test_weights, sampler, n_parallel,
-            run_until_converged, restart_patience,
-        )
-        if error:
-            return error
-        return start_optimize(_optimizer_env(
-            test_names, test_weights, gated_names,
+        return _do_run_or_pause(
+            check_vals, check_ids, gate_vals, gate_ids, store,
             sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
             run_until_converged, restart_patience,
-        ))
+        )
 
-    @app.callback(
-        Output("opt-log", "children"),
-        Input("opt-interval", "n_intervals"),
+    register_log_view(
+        app,
+        pre_id="run-log",
+        interval_id="opt-interval",
+        filter_id="run-log-filter",
+        source=lambda: _read_proc_log("optimize"),
     )
-    def update_opt_log(_):
-        return _read_proc_log("optimize")
 
     @app.callback(
         Output("opt-start-btn", "children"),
+        Output("opt-start-btn", "disabled"),
         Output("opt-stop-btn", "children"),
         Output("opt-stop-btn", "disabled"),
         Input("opt-interval", "n_intervals"),
     )
     def refresh_run_buttons(_):
-        """Start/Stop are really Start/Resume + Pause: reflect that live."""
-        running = optimize_running()
-        try:
-            has_study = context.project().db_path.exists()
-        except Exception:
-            has_study = False
-        start_label = ("Resume Optimisation" if has_study and not running
-                       else "Start Optimisation")
-        return start_label, "Pause", not running
+        return _current_button_state()

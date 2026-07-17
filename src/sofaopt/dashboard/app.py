@@ -28,21 +28,19 @@ from sofaopt.dashboard.callbacks import (
     register_config_callbacks,
     register_interactions_callbacks,
     register_monitoring_callbacks,
-    register_optimise_callbacks,
     register_pareto_callbacks,
-    register_scene_callbacks,
+    register_run_callbacks,
     register_video_callbacks,
 )
 from sofaopt.dashboard.ui.tabs import (
     build_archives_tab,
     build_config_tab,
     build_interactions_tab,
-    build_optimise_tab,
     build_param_bounds_tab,
     build_pareto_tab,
     build_performance_tab,
     build_progress_tab,
-    build_scenes_tab,
+    build_run_tab,
 )
 from sofaopt.dashboard.ui.tabs.styles import (
     BODY_STYLE,
@@ -71,7 +69,7 @@ class DashboardTab:
     Args:
         label: Tab caption shown in the tab bar.
         value: Unique tab id (must not collide with the built-ins:
-            config, scenes, optimise, performance, progress, bounds).
+            config, run, performance, progress, bounds).
         build: Zero-arg callable returning the tab's Dash layout children.
             Called once at app build time, after the project context is set —
             so it may read :mod:`sofaopt.dashboard.context`.
@@ -156,7 +154,7 @@ def create_app(
         style=PAGE_STYLE,
     )
 
-    _register_tab_callbacks(app, project, catalog, hidden)
+    _register_tab_callbacks(app, project, hidden)
     _register_video_routes(app, project)
     _register_stale_reload(app, instance_id)
     for tab in extra_tabs:
@@ -176,8 +174,7 @@ def _build_tab_defs(
     if project.config_file is not None:
         tab_defs.append(("Config", "config", build_config_tab()))
     tab_defs += [
-        ("Scenes", "scenes", build_scenes_tab(catalog)),
-        ("Optimise", "optimise", build_optimise_tab(catalog)),
+        ("Run", "run", build_run_tab(catalog)),
         ("Performance", "performance", build_performance_tab()),
         ("Progress", "progress", build_progress_tab()),
         ("Parameter Bounds", "bounds", build_param_bounds_tab()),
@@ -204,14 +201,12 @@ def _insert_extra_tabs(tab_defs: list[tuple], extra_tabs: Sequence[DashboardTab]
     return tab_defs
 
 
-def _register_tab_callbacks(app, project: SofaOptProject, catalog, hidden: set) -> None:
+def _register_tab_callbacks(app, project: SofaOptProject, hidden: set) -> None:
     """Register the built-in callbacks that match the visible tabs."""
     if project.config_file is not None and "config" not in hidden:
         register_config_callbacks(app)
-    if "scenes" not in hidden:
-        register_scene_callbacks(app, catalog)
-    if "optimise" not in hidden:
-        register_optimise_callbacks(app)
+    if "run" not in hidden:
+        register_run_callbacks(app)
     register_monitoring_callbacks(app)
     register_video_callbacks(app)
     if not project.multi_objective and "interactions" not in hidden:
