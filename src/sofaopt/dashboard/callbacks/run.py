@@ -70,10 +70,15 @@ def _converged_error(sampler, run_until_converged, restart_patience) -> str | No
     if int(restart_patience or 0) < 1:
         return "'Run until converged' needs restart patience >= 1."
     project = context.project()
-    if project.cmaes_restarts <= 0 or project.stall_generations <= 0:
+    # Mirror SofaOptProject's own validation: restart_on_convergence is an
+    # equally valid trigger (and the recommended one) — demanding
+    # stall_generations here would refuse a config the validator accepts.
+    has_trigger = project.stall_generations > 0 or project.restart_on_convergence
+    if project.cmaes_restarts <= 0 or not has_trigger:
         return (
             "'Run until converged' needs the project to set cmaes_restarts > 0 "
-            "and stall_generations > 0 (the restart trigger and budget)."
+            "and a restart trigger (stall_generations > 0 or "
+            "restart_on_convergence=True)."
         )
     return None
 
