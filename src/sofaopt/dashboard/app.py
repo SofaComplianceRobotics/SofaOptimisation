@@ -30,7 +30,6 @@ from sofaopt.dashboard.callbacks import (
     register_monitoring_callbacks,
     register_optimise_callbacks,
     register_pareto_callbacks,
-    register_playground_callbacks,
     register_scene_callbacks,
     register_video_callbacks,
 )
@@ -42,7 +41,6 @@ from sofaopt.dashboard.ui.tabs import (
     build_param_bounds_tab,
     build_pareto_tab,
     build_performance_tab,
-    build_playground_tab,
     build_progress_tab,
     build_scenes_tab,
 )
@@ -183,7 +181,6 @@ def _build_tab_defs(
         ("Performance", "performance", build_performance_tab()),
         ("Progress", "progress", build_progress_tab()),
         ("Parameter Bounds", "bounds", build_param_bounds_tab()),
-        ("Playground", "playground", build_playground_tab()),
     ]
     # Interaction analysis needs a scalar objective; skip in Pareto mode.
     if not project.multi_objective:
@@ -215,8 +212,6 @@ def _register_tab_callbacks(app, project: SofaOptProject, catalog, hidden: set) 
         register_scene_callbacks(app, catalog)
     if "optimise" not in hidden:
         register_optimise_callbacks(app)
-    if "playground" not in hidden:
-        register_playground_callbacks(app)
     register_monitoring_callbacks(app)
     register_video_callbacks(app)
     if not project.multi_objective and "interactions" not in hidden:
