@@ -313,6 +313,27 @@ def _do_run_or_pause(
     ))
 
 
+def _restart_row_state(sampler, cmaes_restarts) -> tuple[bool, bool, list[dict]]:
+    """(restarts disabled, pop-growth disabled, flag options) for the current
+    sampler/restarts values.
+
+    The three flags are INDEPENDENT booleans, not alternatives — any
+    combination is valid. What gets grayed is real dependency: the IPOP
+    machinery (Restarts, Pop growth, conv/warm) is CMA-ES-only, and the
+    conv/warm flags additionally need Restarts > 0. Stall gens stays enabled
+    for every sampler (without restarts it stops the run on a plateau), and
+    Dedup is sampler-agnostic.
+    """
+    is_cmaes = sampler == "cmaes"
+    has_restarts = is_cmaes and int(cmaes_restarts or 0) > 0
+    options = [
+        {"label": " Restart on convergence", "value": "conv", "disabled": not has_restarts},
+        {"label": " Warm restarts", "value": "warm", "disabled": not has_restarts},
+        {"label": " Dedup identical trials", "value": "dedup", "disabled": False},
+    ]
+    return (not is_cmaes), (not is_cmaes), options
+
+
 def _current_button_state() -> tuple[str, bool, str, bool]:
     """(start label, start disabled, pause label, pause disabled) for the live
     run state — including a run started outside the dashboard (holds the study
@@ -329,9 +350,9 @@ def _current_button_state() -> tuple[str, bool, str, bool]:
     return start_label, False, "Pause", True
 
 
-def register_run_callbacks(app) -> None:
-    """Register weight-store, slider/pie sync, scene preview, run/pause, log."""
-
+def _register_weight_callbacks(app) -> None:
+    """Weight-store / slider / pie / status sync — multi-test catalogs only
+    (the single-test layout renders none of these components)."""
     app.clientside_callback(
         _WEIGHT_SYNC_JS,
         Output("opt-weights-store", "data"),
@@ -366,6 +387,23 @@ def register_run_callbacks(app) -> None:
         Input({"type": "test-check", "test": ALL}, "value"),
         State({"type": "weight-slider", "test": ALL}, "id"),
     )
+
+
+def register_run_callbacks(app) -> None:
+    """Register weight-store, slider/pie sync, scene preview, run/pause, log."""
+
+    if len(context.catalog()) > 1:
+        _register_weight_callbacks(app)
+
+    @app.callback(
+        Output("opt-cmaes-restarts", "disabled"),
+        Output("opt-inc-popsize", "disabled"),
+        Output("opt-restart-flags", "options"),
+        Input("opt-sampler", "value"),
+        Input("opt-cmaes-restarts", "value"),
+    )
+    def update_restart_row(sampler, cmaes_restarts):
+        return _restart_row_state(sampler, cmaes_restarts)
 
     @app.callback(
         Output("run-scene-status", "children"),

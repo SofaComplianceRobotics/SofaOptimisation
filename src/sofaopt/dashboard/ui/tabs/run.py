@@ -274,25 +274,31 @@ def _build_sampler_controls() -> html.Div:
     )
 
 
-def _test_row(name: str, spec, pre_selected: bool, weight: int) -> html.Div:
-    """One catalog row: Preview · select · gate · weight."""
-    return html.Div(
-        [
-            html.Button(
-                "👁 Preview",
-                id={"type": "scene-preview", "test": name},
-                n_clicks=0,
-                className="btn btn-outline-secondary btn-sm me-2",
-                style={"flexShrink": 0, "whiteSpace": "nowrap"},
-                title="Open this scene in an interactive SOFA viewer",
-            ),
-            dcc.Checklist(
-                id={"type": "test-check", "test": name},
-                options=[{"label": f" {spec.label}", "value": name}],
-                value=[name] if pre_selected else [],
-                style={"display": "inline-flex", "alignItems": "center", "minWidth": "200px", "flexShrink": 0},
-                className="me-2",
-            ),
+def _test_row(name: str, spec, pre_selected: bool, weight: int, simple: bool = False) -> html.Div:
+    """One catalog row: Preview · select (· gate · weight unless ``simple``).
+
+    ``simple`` is the single-test layout: gating and weighting are meaningless
+    with one test (it carries 100% and there is nothing to gate against).
+    """
+    children = [
+        html.Button(
+            "👁 Preview",
+            id={"type": "scene-preview", "test": name},
+            n_clicks=0,
+            className="btn btn-outline-secondary btn-sm me-2",
+            style={"flexShrink": 0, "whiteSpace": "nowrap"},
+            title="Open this scene in an interactive SOFA viewer",
+        ),
+        dcc.Checklist(
+            id={"type": "test-check", "test": name},
+            options=[{"label": f" {spec.label}", "value": name}],
+            value=[name] if pre_selected else [],
+            style={"display": "inline-flex", "alignItems": "center", "minWidth": "200px", "flexShrink": 0},
+            className="me-2",
+        ),
+    ]
+    if not simple:
+        children += [
             html.Div(
                 dcc.Checklist(
                     id={"type": "gate-check", "test": name},
@@ -303,7 +309,7 @@ def _test_row(name: str, spec, pre_selected: bool, weight: int) -> html.Div:
                 ),
                 title="Gated: this test only runs after one of the ungated tests succeeds in "
                       "the same trial — skips an expensive secondary test when the primary "
-                      "already failed. Only useful with several tests; at least one must stay ungated.",
+                      "already failed. At least one selected test must stay ungated.",
                 style={"flexShrink": 0},
             ),
             html.Div(
@@ -319,17 +325,62 @@ def _test_row(name: str, spec, pre_selected: bool, weight: int) -> html.Div:
                 ),
                 style={"flexGrow": 1},
             ),
-        ],
+        ]
+    return html.Div(
+        children,
         className="d-flex align-items-center mb-3",
         style={"gap": "8px"},
     )
 
 
-def build_run_tab(catalog: dict) -> html.Div:
-    """Build the Run tab from the project's test catalog."""
-    names = list(catalog.keys())
-    any_default = any(spec.default_selected for spec in catalog.values())
+_BOUNDS_READONLY_NOTE = (
+    "Bounds are declared in project.py (ParamSpec low/high) and are read-only "
+    "here by design: the launch path only trusts project-declared values, and "
+    "changed bounds must never meet a resumed study. To widen the search: edit "
+    "project.py, archive the current run (Archives tab), then start fresh."
+)
 
+
+def _build_search_space_block(project) -> html.Details:
+    """Collapsible, read-only view of the search space next to the launch
+    controls, so widening decisions can be made without opening project.py."""
+    from sofaopt.dashboard.plotting.bounds import _fmt
+
+    active = sum(1 for p in project.params if not p.is_frozen)
+    frozen = len(project.params) - active
+    items = []
+    for p in project.params:
+        d = p.to_dict()
+        if p.type == "bool":
+            rng = "true / false"
+        elif p.is_frozen:
+            rng = f"frozen @ {_fmt(d['default'])}"
+        else:
+            rng = f"[{_fmt(d['min'])}, {_fmt(d['max'])}] · default {_fmt(d['default'])}"
+        items.append(
+            html.Li(
+                [html.Code(p.name), html.Span(f" — {d['type']} · {rng}", className="text-muted")],
+                className="small",
+            )
+        )
+    return html.Details(
+        [
+            html.Summary(
+                f"Search space — {active} active · {frozen} frozen (read-only)",
+                className="small fw-semibold text-muted",
+                title=_BOUNDS_READONLY_NOTE,
+            ),
+            html.Ul(items, className="mb-1 mt-2"),
+            html.Small(_BOUNDS_READONLY_NOTE, className="text-muted"),
+        ],
+        id="run-search-space",
+        className="mb-3 px-1",
+    )
+
+
+def _initial_weights(catalog: dict, names: list[str]) -> dict[str, int]:
+    """Default weight store: an equal split over the default-selected tests."""
+    any_default = any(spec.default_selected for spec in catalog.values())
     selected_names = [
         name for name, spec in catalog.items() if spec.default_selected or not any_default
     ]
@@ -342,7 +393,30 @@ def build_run_tab(catalog: dict) -> html.Div:
             wi += 1
         else:
             initial_store[name] = 0
+    return initial_store
 
+
+def _single_test_section(name: str, spec) -> html.Div:
+    """Tests block for a one-test catalog: no gate/weights/pie — the single
+    test carries 100% of the objective and there is nothing to gate against."""
+    return html.Div(
+        [
+            html.P(
+                "Preview opens the scene in an interactive SOFA window. This "
+                "project has a single test — it carries 100% of the objective "
+                "(weights and gating only apply to multi-test projects).",
+                className="text-muted mb-2",
+            ),
+            html.Div(_test_row(name, spec, pre_selected=True, weight=100, simple=True), className="mb-2"),
+            html.Div(id="run-scene-status", className="mb-2 small"),
+        ],
+        className="mb-3",
+    )
+
+
+def _multi_test_section(catalog: dict, initial_store: dict[str, int]) -> html.Div:
+    """Tests block for a multi-test catalog: rows + weight buttons + pie."""
+    any_default = any(spec.default_selected for spec in catalog.values())
     test_rows = [
         _test_row(
             name, spec,
@@ -351,12 +425,8 @@ def build_run_tab(catalog: dict) -> html.Div:
         )
         for name, spec in catalog.items()
     ]
-
     return html.Div(
         [
-            html.H3("Run", className="mb-2"),
-            _build_sampler_controls(),
-            dcc.Store(id="opt-weights-store", data=initial_store),
             html.Div(
                 [
                     html.Div(
@@ -394,6 +464,28 @@ def build_run_tab(catalog: dict) -> html.Div:
                 className="row g-3 mb-3",
             ),
             html.Div(id="opt-weight-status", className="mb-3"),
+        ]
+    )
+
+
+def build_run_tab(catalog: dict) -> html.Div:
+    """Build the Run tab from the project's test catalog."""
+    names = list(catalog.keys())
+    single = len(names) == 1
+    initial_store = {names[0]: 100} if single else _initial_weights(catalog, names)
+    tests_section = (
+        _single_test_section(names[0], catalog[names[0]])
+        if single
+        else _multi_test_section(catalog, initial_store)
+    )
+
+    return html.Div(
+        [
+            html.H3("Run", className="mb-2"),
+            _build_sampler_controls(),
+            _build_search_space_block(context.project()),
+            dcc.Store(id="opt-weights-store", data=initial_store),
+            tests_section,
             html.Div(
                 [
                     html.Button("Start Optimisation", id="opt-start-btn", n_clicks=0, className="btn btn-success me-2"),
