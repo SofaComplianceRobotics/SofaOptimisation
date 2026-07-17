@@ -40,6 +40,11 @@ def attach_run_log_file(logs_dir: Path, *, truncate: bool) -> Path:
     ``%(message)s`` look. Idempotent: a second call for the same path is a
     no-op, so re-entering ``run_optimization`` in one process won't double-log.
 
+    One active run log per process: a call for a *different* path closes the
+    previous run-log handler first (production runs one campaign per process, so
+    the only caller that hits this is a test driving several runs — leaving old
+    handlers open would pin their now-deleted temp dirs open on Windows).
+
     ``truncate`` starts a fresh file (a brand-new run); resume appends. The log
     lives outside ``runtime/`` (see :meth:`SofaOptProject.logs_dir`), so it is
     not moved by archiving and must be reset here rather than by that move.
@@ -51,10 +56,18 @@ def attach_run_log_file(logs_dir: Path, *, truncate: bool) -> Path:
     # Match logging.FileHandler's own normalization (it stores os.path.abspath);
     # normcase folds Windows case so a second call is reliably a no-op.
     target = os.path.normcase(os.path.abspath(path))
-    for h in root.handlers:
+    for h in list(root.handlers):
         base = getattr(h, "baseFilename", None)
-        if isinstance(h, logging.FileHandler) and base is not None and os.path.normcase(base) == target:
+        if not (isinstance(h, logging.FileHandler) and base is not None):
+            continue
+        # Only touch run-log handlers we created (basename optimize.log), never
+        # a FileHandler a user attached for their own purposes.
+        if os.path.basename(base) != _RUN_LOG_NAME:
+            continue
+        if os.path.normcase(base) == target:
             return path
+        root.removeHandler(h)
+        h.close()
     handler = logging.FileHandler(path, mode="w" if truncate else "a", encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S"))
     root.addHandler(handler)
