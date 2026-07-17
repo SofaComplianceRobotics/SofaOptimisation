@@ -6,6 +6,7 @@ import contextlib
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from sofaopt.dashboard import context
@@ -150,29 +151,57 @@ def stop_optimize_and_wait(timeout_s: float = 15.0) -> bool:
     return False
 
 
+def _viewer_cmd(project, scene_file: Path, gui: str) -> list[str]:
+    """runSofa command for an interactive viewer. ``-g imgui`` only works when
+    the plugin registering that GUI is loaded, so SofaImGui is appended when
+    missing — same rule as the Results tab's "Test it" launcher."""
+    plugins = list(project.sofa_plugins)
+    if gui == "imgui" and "SofaImGui" not in plugins:
+        plugins.append("SofaImGui")
+    cmd = [str(project.runsofa_exe)]
+    for plugin in plugins:
+        cmd += ["-l", plugin]
+    cmd += ["-g", gui, str(scene_file)]
+    return cmd
+
+
 def launch_scene(scene_file: Path, extra_env: dict | None = None, gui: str = "imgui") -> str:
     """Launch one scene in an interactive ``runSofa`` window for viewing."""
     project = context.project()
     if project.runsofa_exe is None:
         return "runSofa not configured (set RUNSOFA_EXE or add runsofa_exe to the project)."
-    runsofa = str(project.runsofa_exe)
-    if not os.path.isfile(runsofa):
-        return f"runSofa not found at: {runsofa}"
+    if not os.path.isfile(str(project.runsofa_exe)):
+        return f"runSofa not found at: {project.runsofa_exe}"
     env = project.scene_env()
     if extra_env:
         env.update({k: str(v) for k, v in extra_env.items()})
-    cmd = [runsofa]
-    for plugin in project.sofa_plugins:
-        cmd += ["-l", plugin]
-    cmd += ["-g", gui, str(scene_file)]
     try:
         from sofaopt.core.sofa_runner import attach_process_to_sofa_job
 
-        proc = subprocess.Popen(cmd, env=env, cwd=str(project.work_dir))
+        log_path = _log_dir() / "preview.log"
+        log_file = open(log_path, "w", encoding="utf-8")  # noqa: SIM115  # handle feeds the child process and must outlive this function
+        proc = subprocess.Popen(
+            _viewer_cmd(project, scene_file, gui),
+            env=env,
+            cwd=str(project.work_dir),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
         # Viewer windows must not outlive the dashboard (kill-on-close job).
         # The headless optimize run is intentionally NOT attached: a long run
         # must survive closing the dashboard; it owns its own job for children.
         attach_process_to_sofa_job(proc)
+        # A bad GUI/plugin/scene makes runSofa exit within moments while the
+        # PID looked fine — reporting "Launched" then no window ever appearing
+        # is a silent failure (observed with -g imgui minus SofaImGui). Give it
+        # a moment and surface the log instead.
+        time.sleep(1.5)
+        if proc.poll() is not None:
+            tail = _read_proc_log("preview", tail=8) or "(empty log)"
+            return (
+                f"SOFA exited immediately (code {proc.returncode}) — "
+                f"see {log_path}. Log tail:\n{tail}"
+            )
         return f"Launched SOFA (PID {proc.pid})."
     except Exception as exc:
         return f"Failed to launch: {exc}"
