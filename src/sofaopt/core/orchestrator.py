@@ -21,6 +21,7 @@ from sofaopt.core.generation.runner import run_generation
 from sofaopt.core.generation.types import RunHistory
 from sofaopt.core.runconfig import RunConfig
 from sofaopt.core.runtime_dirs import (
+    attach_run_log_file,
     configure_console_logging,
     last_gen_index,
     reset_trials_dir,
@@ -207,6 +208,11 @@ def run_optimization(
     if cfg is None:
         project = _apply_env_overrides(project)
         cfg = RunConfig.from_env(project)
+
+    # One canonical run log every launch path writes, so the dashboard can tail
+    # a run it did not spawn (CLI / run.py). Attached here — before _run's
+    # possible auto-archive — is safe because logs_dir sits outside runtime/.
+    attach_run_log_file(project.logs_dir, truncate=not project.db_path.exists())
 
     # At most one optimizer per study: a second process resuming the same
     # study.db fails the first one's in-flight trials (see core/runlock.py).

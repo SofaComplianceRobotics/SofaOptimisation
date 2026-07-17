@@ -15,7 +15,7 @@ _PROCS: dict[str, subprocess.Popen | None] = {"optimize": None}
 
 
 def _log_dir() -> Path:
-    d = context.project().runtime_dir / "logs"
+    d = context.project().logs_dir
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -32,8 +32,13 @@ def _start_proc(name: str, script: Path, env: dict | None = None) -> str:
     if script is None:
         return "No run_script configured on the project (dashboard is read-only)."
     try:
-        log_path = _log_dir() / f"{name}.log"
-        log_file = open(log_path, "w", encoding="utf-8")  # noqa: SIM115  # handle feeds the child process and must outlive this function
+        # The optimizer tees its own structured, level-tagged log to
+        # {logs_dir}/optimize.log (see core.runtime_dirs.attach_run_log_file),
+        # which the dashboard tails. The child's raw stdout/stderr goes to a
+        # separate .console.log — a crash / pre-logging fallback only, so the
+        # tailed log never carries duplicated lines.
+        console_path = _log_dir() / f"{name}.console.log"
+        log_file = open(console_path, "w", encoding="utf-8")  # noqa: SIM115  # handle feeds the child process and must outlive this function
         run_env = env if env is not None else os.environ.copy()
         run_env["PYTHONIOENCODING"] = "utf-8"
         python_exe = context.project().run_python_exe
@@ -107,6 +112,24 @@ def stop_optimize() -> str:
 def optimize_running() -> bool:
     """True while the dashboard-launched optimization process is alive."""
     return _proc_running("optimize")
+
+
+def external_run_pid() -> int | None:
+    """PID of an optimizer holding this study's run lock but NOT spawned by the
+    dashboard (a ``sofaopt`` CLI / ``run.py`` run), else None. The dashboard can
+    monitor such a run (it tails the same log) but cannot pause it."""
+    from sofaopt.core.runlock import lock_holder
+
+    if _proc_running("optimize"):
+        return None
+    return lock_holder(context.project().runtime_dir)
+
+
+def run_is_active() -> bool:
+    """True when any optimizer is running on this study — the dashboard's own
+    child or an external CLI/script run (via the run lock). Use this to gate
+    actions that are unsafe during a live run (e.g. archiving moves runtime/)."""
+    return _proc_running("optimize") or external_run_pid() is not None
 
 
 def stop_optimize_and_wait(timeout_s: float = 15.0) -> bool:

@@ -34,6 +34,22 @@ def _optimize_running() -> bool:
     return _proc_running("optimize")
 
 
+def _external_run_block():
+    """A run started outside the dashboard (CLI/run.py) holds the study lock but
+    is not ours to stop; archiving/restoring would move ``runtime/`` under it.
+    Returns an error span to refuse the action, or None when clear."""
+    from sofaopt.dashboard.process.process_manager import external_run_pid
+
+    pid = external_run_pid()
+    if pid is not None:
+        return html.Span(
+            f"An optimization is running outside the dashboard (PID {pid}) — "
+            f"stop it first.",
+            className="text-danger",
+        )
+    return None
+
+
 def _fmt_when(created_at: float) -> str:
     if not created_at:
         return "?"
@@ -266,6 +282,9 @@ def _params_diff_table(entries) -> list:
 
 def _do_archive_now(name, notes, dirty):
     """Stop-if-running, then archive the current runtime. Returns (status, dirty)."""
+    external = _external_run_block()
+    if external is not None:
+        return external, dirty
     stopped = ""
     if _optimize_running():
         # Stop & archive: pause the run (clean — the study resumes if restored
@@ -286,6 +305,9 @@ def _do_archive_now(name, notes, dirty):
 
 
 def _do_restore(key, dirty):
+    external = _external_run_block()
+    if external is not None:
+        return external, dirty
     if _optimize_running():
         return html.Span("Stop the running optimization first.", className="text-danger"), dirty
     try:

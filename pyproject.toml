@@ -33,6 +33,10 @@ analysis = ["scikit-learn>=1.1"]
 video = ["pygame>=2.1", "PyOpenGL>=3.1", "Pillow>=9.0", "opencv-python>=4.5"]
 dev = ["pytest>=7.0", "ruff>=0.15"]
 
+[project.scripts]
+# Headless run entry point: `sofaopt <project.py> [options]`.
+sofaopt = "sofaopt.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/SofaComplianceRobotics/SofaOptimisation"
 Repository = "https://github.com/SofaComplianceRobotics/SofaOptimisation"

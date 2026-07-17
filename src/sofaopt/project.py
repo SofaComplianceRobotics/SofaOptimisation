@@ -577,6 +577,15 @@ class SofaOptProject:
     def db_path(self) -> Path:
         return self.runtime_dir / "study.db"
 
+    @property
+    def logs_dir(self) -> Path:
+        """Run/session logs, deliberately a sibling of ``runtime`` — never
+        inside it. Archiving *moves* ``runtime`` with ``os.rename``, which fails
+        on Windows while any file inside is open; a handler tailing a log under
+        ``runtime`` would block that move. Keeping logs here also means a run's
+        console log is a session artifact, not archived run data."""
+        return self.work_dir / "logs"
+
     # --- convenience views -------------------------------------------------
     def test(self, name: str) -> TestSpec:
         for t in self.tests:
