@@ -1,5 +1,6 @@
 """Smoke test: the dashboard app assembles (tabs + callbacks register) with the
-new sampler controls and Importance/Interactions tab. No browser / SOFA needed.
+merged Run tab, the sampler/prune controls, and the Parameters tab (which now
+carries the importance/interaction section). No browser / SOFA needed.
 """
 
 from __future__ import annotations
@@ -35,11 +36,17 @@ def test_create_app_builds():
 
     app = create_app(_minimal_project())
     assert app is not None
-    # The new tab and sampler controls must be present in the layout.
     layout_str = str(app.layout)
     for needle in (
-        "Importance / Interactions", "opt-sampler", "opt-cmaes-margin",
-        "opt-seed-sampler", "opt-run-until-converged", "opt-restart-patience",
+        # merged tab structure (Scenes+Optimise -> Run; Bounds+Interactions -> Parameters)
+        "'Run'", "'Monitor'", "'Results'", "'Parameters'",
+        "Importance & Interactions",
+        # Run-tab controls (optimizer + new prune toggle + per-row preview + shared log filter)
+        "opt-sampler", "opt-cmaes-margin", "opt-seed-sampler",
+        "opt-run-until-converged", "opt-restart-patience", "opt-prune-mode",
+        "scene-preview", "run-log-filter",
+        # Parameters tab table
+        "param-table",
     ):
         assert needle in layout_str, f"missing dashboard element: {needle}"
 

@@ -26,17 +26,17 @@ from sofaopt.dashboard import context
 from sofaopt.dashboard.callbacks import (
     register_archives_callbacks,
     register_config_callbacks,
-    register_interactions_callbacks,
-    register_monitoring_callbacks,
+    register_monitor_callbacks,
+    register_parameters_callbacks,
     register_pareto_callbacks,
+    register_results_callbacks,
     register_run_callbacks,
     register_video_callbacks,
 )
 from sofaopt.dashboard.ui.tabs import (
     build_archives_tab,
     build_config_tab,
-    build_interactions_tab,
-    build_param_bounds_tab,
+    build_parameters_tab,
     build_pareto_tab,
     build_performance_tab,
     build_progress_tab,
@@ -69,7 +69,7 @@ class DashboardTab:
     Args:
         label: Tab caption shown in the tab bar.
         value: Unique tab id (must not collide with the built-ins:
-            config, run, performance, progress, bounds).
+            config, run, monitor, results, parameters, pareto, archives).
         build: Zero-arg callable returning the tab's Dash layout children.
             Called once at app build time, after the project context is set —
             so it may read :mod:`sofaopt.dashboard.context`.
@@ -175,13 +175,12 @@ def _build_tab_defs(
         tab_defs.append(("Config", "config", build_config_tab()))
     tab_defs += [
         ("Run", "run", build_run_tab(catalog)),
-        ("Performance", "performance", build_performance_tab()),
-        ("Progress", "progress", build_progress_tab()),
-        ("Parameter Bounds", "bounds", build_param_bounds_tab()),
+        ("Monitor", "monitor", build_progress_tab()),
+        ("Results", "results", build_performance_tab()),
+        ("Parameters", "parameters", build_parameters_tab()),
     ]
-    # Interaction analysis needs a scalar objective; skip in Pareto mode.
-    if not project.multi_objective:
-        tab_defs.append(("Importance / Interactions", "interactions", build_interactions_tab()))
+    # The Parameters tab drops its importance/interaction section in Pareto mode;
+    # the Pareto front takes its place.
     if project.multi_objective:
         tab_defs.append(("Pareto Front", "pareto", build_pareto_tab()))
     tab_defs.append(("Archives", "archives", build_archives_tab()))
@@ -207,10 +206,10 @@ def _register_tab_callbacks(app, project: SofaOptProject, hidden: set) -> None:
         register_config_callbacks(app)
     if "run" not in hidden:
         register_run_callbacks(app)
-    register_monitoring_callbacks(app)
+    register_monitor_callbacks(app)
+    register_results_callbacks(app)
+    register_parameters_callbacks(app)
     register_video_callbacks(app)
-    if not project.multi_objective and "interactions" not in hidden:
-        register_interactions_callbacks(app)
     if project.multi_objective and "pareto" not in hidden:
         register_pareto_callbacks(app)
     if "archives" not in hidden:

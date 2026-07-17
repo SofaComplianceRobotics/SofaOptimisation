@@ -7,6 +7,7 @@ import logging
 import json
 
 import plotly.graph_objects as go
+from dash import html
 
 from sofaopt.dashboard import context
 
@@ -18,6 +19,62 @@ logger = logging.getLogger(__name__)
 def _active_specs() -> list[dict]:
     """Searchable (non-frozen) param specs as plain dicts."""
     return [p.to_dict() for p in context.project().params if not p.is_frozen]
+
+
+def _fmt(v) -> str:
+    """Compact display of a param value (bool stays true/false, not 1/0)."""
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, (int, float)):
+        return f"{v:g}"
+    return str(v)
+
+
+def build_param_table(best_params: dict | None) -> html.Div:
+    """Every parameter in one table — including *frozen* ones (``low == high``),
+    which the bounds heatmap omits. Columns: name / type / range / default /
+    state / current best (from the best completed trial, or the frozen value)."""
+    project = context.project()
+    header = html.Thead(
+        html.Tr([html.Th(h) for h in ("Parameter", "Type", "Range", "Default", "State", "Current best")])
+    )
+    rows = []
+    for p in project.params:
+        d = p.to_dict()
+        frozen = p.is_frozen
+        if p.type == "bool":
+            rng = "true / false"
+        elif frozen:
+            rng = "frozen"
+        else:
+            rng = f"[{_fmt(d['min'])}, {_fmt(d['max'])}]"
+        state = (
+            html.Span("frozen", className="badge bg-secondary")
+            if frozen
+            else html.Span("active", className="badge bg-success")
+        )
+        if best_params and p.name in best_params:
+            current = _fmt(best_params[p.name])
+        elif frozen:
+            current = _fmt(d["default"])
+        else:
+            current = "—"
+        rows.append(
+            html.Tr(
+                [
+                    html.Td(p.name),
+                    html.Td(d["type"]),
+                    html.Td(rng),
+                    html.Td(_fmt(d["default"])),
+                    html.Td(state),
+                    html.Td(current),
+                ]
+            )
+        )
+    return html.Div(
+        html.Table([header, html.Tbody(rows)], className="table table-sm align-middle"),
+        className="table-responsive",
+    )
 
 
 def _load_trial_param_values() -> list[dict]:
@@ -46,25 +103,28 @@ def _load_trial_param_values() -> list[dict]:
     return configs
 
 
+def _density_row(spec: dict, trial_configs: list[dict], nbins: int) -> list[float]:
+    """One parameter's sampled-value histogram, row-normalized to [0, 1]."""
+    name = spec["name"]
+    span = (spec["max"] - spec["min"]) or 1.0
+    counts = [0] * nbins
+    total = 0
+    for cfg in trial_configs:
+        v = cfg.get(name)
+        if isinstance(v, (int, float)):
+            norm = max(0.0, min(1.0, (v - spec["min"]) / span))
+            idx = min(int(norm * nbins), nbins - 1)
+            counts[idx] += 1
+            total += 1
+    maxc = max(counts) if counts else 0
+    return [c / maxc if maxc > 0 else 0.0 for c in counts] if total else [0.0] * nbins
+
+
 def _density_heatmap(active_specs: list[dict], trial_configs: list[dict]) -> go.Heatmap:
     """Per-parameter histogram of sampled values, row-normalized to [0, 1]."""
     nbins = 64
     bin_centers = [(i + 0.5) / nbins for i in range(nbins)]
-    z_rows = []
-    for spec in active_specs:
-        name = spec["name"]
-        span = (spec["max"] - spec["min"]) or 1.0
-        counts = [0] * nbins
-        total = 0
-        for cfg in trial_configs:
-            v = cfg.get(name)
-            if isinstance(v, (int, float)):
-                norm = max(0.0, min(1.0, (v - spec["min"]) / span))
-                idx = min(int(norm * nbins), nbins - 1)
-                counts[idx] += 1
-                total += 1
-        maxc = max(counts) if counts else 0
-        z_rows.append([c / maxc if maxc > 0 else 0.0 for c in counts] if total else [0.0] * nbins)
+    z_rows = [_density_row(spec, trial_configs, nbins) for spec in active_specs]
     return go.Heatmap(
         x=bin_centers,
         y=[spec["name"] for spec in active_specs],
@@ -77,43 +137,53 @@ def _density_heatmap(active_specs: list[dict], trial_configs: list[dict]) -> go.
     )
 
 
+def _marker_values(spec: dict, latest_config: dict | None) -> list[float]:
+    """Latest-trial value(s) for a parameter, defaulting to the range midpoint."""
+    values: list[float] = []
+    if latest_config is not None:
+        v = latest_config.get(spec["name"])
+        if isinstance(v, (int, float)):
+            values = [float(v)]
+        elif isinstance(v, (list, tuple)):
+            values = [float(x) for x in v if isinstance(x, (int, float))]
+    if not values:
+        values = [(spec["min"] + spec["max"]) / 2]
+    return values
+
+
+def _add_marker(fig: go.Figure, spec: dict, values: list[float]) -> None:
+    """Diamond marker(s) + value annotation for one parameter's latest value."""
+    name = spec["name"]
+    param_min, param_max = spec["min"], spec["max"]
+    span = (param_max - param_min) or 1.0
+    marker_xs = [max(0.0, min(1.0, (val - param_min) / span)) for val in values]
+    side_texts = [f"{val:.3f}" for val in values]
+    if not marker_xs:
+        return
+    fig.add_trace(
+        go.Scatter(
+            x=marker_xs,
+            y=[name] * len(marker_xs),
+            mode="markers",
+            marker=dict(symbol="diamond", size=12, color="#ffffff", line=dict(width=2, color="#212121")),
+            hovertemplate=(
+                f"<b>{name}</b><br>Current: " + ", ".join(side_texts)
+                + f"<br>Min: {param_min:.3f} | Max: {param_max:.3f}<extra></extra>"
+            ),
+            showlegend=False,
+        )
+    )
+    fig.add_annotation(
+        x=1.02, y=name, text="[" + ", ".join(side_texts) + "]",
+        showarrow=False, xanchor="left", yanchor="middle",
+        font=dict(size=11, color="#111"),
+    )
+
+
 def _add_latest_markers(fig: go.Figure, active_specs: list[dict], latest_config: dict | None) -> None:
     """Diamond marker(s) + value annotation for the latest trial, per parameter."""
     for spec in active_specs:
-        name = spec["name"]
-        param_min, param_max = spec["min"], spec["max"]
-        span = (param_max - param_min) or 1.0
-        values: list[float] = []
-        if latest_config is not None:
-            v = latest_config.get(name)
-            if isinstance(v, (int, float)):
-                values = [float(v)]
-            elif isinstance(v, (list, tuple)):
-                values = [float(x) for x in v if isinstance(x, (int, float))]
-        if not values:
-            values = [(param_min + param_max) / 2]
-
-        marker_xs = [max(0.0, min(1.0, (val - param_min) / span)) for val in values]
-        side_texts = [f"{val:.3f}" for val in values]
-        if marker_xs:
-            fig.add_trace(
-                go.Scatter(
-                    x=marker_xs,
-                    y=[name] * len(marker_xs),
-                    mode="markers",
-                    marker=dict(symbol="diamond", size=12, color="#ffffff", line=dict(width=2, color="#212121")),
-                    hovertemplate=(
-                        f"<b>{name}</b><br>Current: " + ", ".join(side_texts)
-                        + f"<br>Min: {param_min:.3f} | Max: {param_max:.3f}<extra></extra>"
-                    ),
-                    showlegend=False,
-                )
-            )
-            fig.add_annotation(
-                x=1.02, y=name, text="[" + ", ".join(side_texts) + "]",
-                showarrow=False, xanchor="left", yanchor="middle",
-                font=dict(size=11, color="#111"),
-            )
+        _add_marker(fig, spec, _marker_values(spec, latest_config))
 
 
 def _build_param_bounds_graph(show_heatmap: bool = False) -> go.Figure:
