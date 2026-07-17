@@ -45,6 +45,29 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--gens", type=int, help="Override n_generations.")
     p.add_argument("--restart-patience", type=int, dest="restart_patience", help="Override restart_patience.")
     p.add_argument(
+        "--cmaes-restarts", type=int, dest="cmaes_restarts",
+        help="Max IPOP restarts (0 = a stall stops the run).",
+    )
+    p.add_argument(
+        "--stall-generations", type=int, dest="stall_generations",
+        help="Generations without improvement that trigger a restart/stop (0 = off).",
+    )
+    p.add_argument(
+        "--inc-popsize", type=int, dest="cmaes_inc_popsize",
+        help="Population multiplier applied at each IPOP restart.",
+    )
+    for flag, field, on_help in (
+        ("restart-on-convergence", "restart_on_convergence",
+         "Trigger restarts on CMA-ES's convergence signal instead of the stall plateau."),
+        ("warm-restarts", "warm_restarts",
+         "Re-seed each restart from the best-so-far instead of a random point."),
+        ("dedup-trials", "dedup_trials",
+         "Reuse recorded scores for repeated param vectors (deterministic objectives only)."),
+    ):
+        grp = p.add_mutually_exclusive_group()
+        grp.add_argument(f"--{flag}", dest=field, action="store_true", default=None, help=on_help)
+        grp.add_argument(f"--no-{flag}", dest=field, action="store_false", help=f"Disable {flag.replace('-', ' ')}.")
+    p.add_argument(
         "--prune-mode", choices=["off", "shadow", "kill"], dest="prune_mode",
         help="Multi-fidelity pruning mode (needs a prunable test).",
     )
@@ -84,6 +107,12 @@ def _overrides(args: argparse.Namespace) -> dict:
         "prune_mode": args.prune_mode,
         "cmaes_with_margin": args.cmaes_margin,
         "run_until_converged": args.run_until_converged,
+        "cmaes_restarts": args.cmaes_restarts,
+        "stall_generations": args.stall_generations,
+        "cmaes_inc_popsize": args.cmaes_inc_popsize,
+        "restart_on_convergence": args.restart_on_convergence,
+        "warm_restarts": args.warm_restarts,
+        "dedup_trials": args.dedup_trials,
     }
     return {k: v for k, v in fields.items() if v is not None}
 

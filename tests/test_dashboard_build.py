@@ -44,6 +44,8 @@ def test_create_app_builds():
         # Run-tab controls (optimizer + new prune toggle + per-row preview + shared log filter)
         "opt-sampler", "opt-cmaes-margin", "opt-seed-sampler",
         "opt-run-until-converged", "opt-restart-patience", "opt-prune-mode",
+        "opt-cmaes-restarts", "opt-stall-generations", "opt-inc-popsize",
+        "opt-restart-flags",
         "scene-preview", "run-log-filter",
         # Parameters tab table
         "param-table",

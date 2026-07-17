@@ -41,13 +41,15 @@ def _selected_tests(check_vals, check_ids, store) -> tuple[list[str], dict[str, 
 def _selection_error(
     test_names, gated_names, test_weights, sampler, n_parallel,
     run_until_converged=None, restart_patience=None,
+    cmaes_restarts=None, stall_generations=None, restart_flags=None,
 ) -> str | None:
     """Validation message for the Run request, or None when it can start.
 
     The authoritative gate is ``SofaOptProject.__post_init__`` in the launched
     subprocess; this only pre-flights the UI-knowable conditions so a
-    misconfigured "Run until converged" surfaces a friendly message instead of
-    a subprocess traceback in the log.
+    misconfigured run surfaces a friendly message instead of a subprocess
+    traceback in the log. Restart settings are validated against the UI values
+    (they override the project fields via the ``OPT_*`` env keys).
     """
     if not test_names:
         return "No tests selected."
@@ -58,35 +60,62 @@ def _selection_error(
         return f"Weights must sum to 100% (currently {total}%)."
     if sampler == "cmaes" and int(n_parallel or 0) < 4:
         return "CMA-ES needs Parallel >= 4. Lower it only with a different sampler."
-    return _converged_error(sampler, run_until_converged, restart_patience)
+    has_trigger = int(stall_generations or 0) > 0 or "conv" in (restart_flags or [])
+    if int(cmaes_restarts or 0) > 0 and not has_trigger:
+        return (
+            "Restarts need a trigger — set Stall gens > 0 or check "
+            "'Restart on convergence'."
+        )
+    return _converged_error(
+        sampler, run_until_converged, restart_patience, cmaes_restarts, has_trigger
+    )
 
 
-def _converged_error(sampler, run_until_converged, restart_patience) -> str | None:
-    """Pre-flight the 'Run until converged' toggle against project settings."""
+def _converged_error(
+    sampler, run_until_converged, restart_patience, cmaes_restarts, has_trigger
+) -> str | None:
+    """Pre-flight the 'Run until converged' toggle against the UI settings.
+
+    Mirrors SofaOptProject's own validation (restart_on_convergence counts as
+    a trigger) so a config the validator accepts is never refused here.
+    """
     if not (run_until_converged and "converged" in run_until_converged):
         return None
     if sampler != "cmaes":
         return "'Run until converged' needs the CMA-ES sampler."
     if int(restart_patience or 0) < 1:
         return "'Run until converged' needs restart patience >= 1."
-    project = context.project()
-    # Mirror SofaOptProject's own validation: restart_on_convergence is an
-    # equally valid trigger (and the recommended one) — demanding
-    # stall_generations here would refuse a config the validator accepts.
-    has_trigger = project.stall_generations > 0 or project.restart_on_convergence
-    if project.cmaes_restarts <= 0 or not has_trigger:
+    if int(cmaes_restarts or 0) <= 0 or not has_trigger:
         return (
-            "'Run until converged' needs the project to set cmaes_restarts > 0 "
-            "and a restart trigger (stall_generations > 0 or "
-            "restart_on_convergence=True)."
+            "'Run until converged' needs Restarts > 0 and a restart trigger "
+            "(Stall gens > 0 or 'Restart on convergence')."
         )
     return None
+
+
+def _apply_restart_env(env: dict, restarts: dict | None) -> None:
+    """Restart/convergence-row overrides (a None number = leave the project's
+    value alone; the flags checklist is always authoritative)."""
+    restarts = restarts or {}
+    for field, key in (
+        ("cmaes_restarts", envkeys.CMAES_RESTARTS),
+        ("stall_generations", envkeys.STALL_GENERATIONS),
+        ("inc_popsize", envkeys.CMAES_INC_POPSIZE),
+    ):
+        value = restarts.get(field)
+        if value is not None:
+            env[key] = str(int(value))
+    flags = restarts.get("flags") or []
+    env[envkeys.RESTART_ON_CONVERGENCE] = "1" if "conv" in flags else "0"
+    env[envkeys.WARM_RESTARTS] = "1" if "warm" in flags else "0"
+    env[envkeys.DEDUP_TRIALS] = "1" if "dedup" in flags else "0"
 
 
 def _optimizer_env(
     test_names, test_weights, gated_names,
     sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
     run_until_converged=None, restart_patience=None, prune_mode=None,
+    restarts=None,
 ) -> dict:
     """Environment for the optimizer subprocess: selection + setting overrides."""
     env = os.environ.copy()
@@ -96,6 +125,7 @@ def _optimizer_env(
         env[envkeys.GATED_TESTS] = ",".join(gated_names)
     if prune_mode:
         env[envkeys.PRUNE_MODE] = str(prune_mode)
+    _apply_restart_env(env, restarts)
 
     # Optimizer-setting overrides → honored by run_optimization before build_study.
     if sampler:
@@ -251,9 +281,13 @@ def _do_scene_preview() -> str:
 def _do_run_or_pause(
     check_vals, check_ids, gate_vals, gate_ids, store,
     sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
-    run_until_converged, restart_patience, prune_mode,
+    run_until_converged, restart_patience, prune_mode, restarts,
 ) -> str:
-    """Start/Resume (validate + launch) or Pause, per the triggering button."""
+    """Start/Resume (validate + launch) or Pause, per the triggering button.
+
+    ``restarts`` bundles the restart/convergence-row values:
+    ``{"cmaes_restarts", "stall_generations", "inc_popsize", "flags"}``.
+    """
     if ctx.triggered_id == "opt-stop-btn":
         return stop_optimize()
 
@@ -267,13 +301,15 @@ def _do_run_or_pause(
     error = _selection_error(
         test_names, gated_names, test_weights, sampler, n_parallel,
         run_until_converged, restart_patience,
+        restarts.get("cmaes_restarts"), restarts.get("stall_generations"),
+        restarts.get("flags"),
     )
     if error:
         return error
     return start_optimize(_optimizer_env(
         test_names, test_weights, gated_names,
         sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
-        run_until_converged, restart_patience, prune_mode,
+        run_until_converged, restart_patience, prune_mode, restarts,
     ))
 
 
@@ -356,17 +392,28 @@ def register_run_callbacks(app) -> None:
         State("opt-run-until-converged", "value"),
         State("opt-restart-patience", "value"),
         State("opt-prune-mode", "value"),
+        State("opt-cmaes-restarts", "value"),
+        State("opt-stall-generations", "value"),
+        State("opt-inc-popsize", "value"),
+        State("opt-restart-flags", "value"),
         prevent_initial_call=True,
     )
     def handle_optimise(
         _, __, check_vals, check_ids, gate_vals, gate_ids, store,
         sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
         run_until_converged, restart_patience, prune_mode,
+        cmaes_restarts, stall_generations, inc_popsize, restart_flags,
     ):
+        restarts = {
+            "cmaes_restarts": cmaes_restarts,
+            "stall_generations": stall_generations,
+            "inc_popsize": inc_popsize,
+            "flags": restart_flags,
+        }
         return _do_run_or_pause(
             check_vals, check_ids, gate_vals, gate_ids, store,
             sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
-            run_until_converged, restart_patience, prune_mode,
+            run_until_converged, restart_patience, prune_mode, restarts,
         )
 
     register_log_view(

@@ -33,6 +33,86 @@ def _equal_split(n: int) -> list[int]:
     return [base + (1 if i < rem else 0) for i in range(n)]
 
 
+def _num_input(input_id: str, label: str, value, tooltip: str, min_val: int = 0) -> html.Div:
+    """One labelled number input with a hover tooltip."""
+    return html.Div(
+        [
+            html.Label(label, className="form-label mb-1 small text-muted"),
+            dcc.Input(
+                id=input_id, type="number", min=min_val, step=1, value=value,
+                className="form-control form-control-sm", style={"width": "90px"},
+            ),
+        ],
+        title=tooltip,
+        className="me-3",
+    )
+
+
+def _build_restart_controls(project) -> html.Div:
+    """Second optimizer row: IPOP-restart / convergence / dedup knobs.
+
+    Forwarded as ``OPT_*`` env overrides like the first row, so a broad
+    run-until-converged campaign can be configured entirely from the UI.
+    """
+    flags = []
+    if project.restart_on_convergence:
+        flags.append("conv")
+    if project.warm_restarts:
+        flags.append("warm")
+    if project.dedup_trials:
+        flags.append("dedup")
+    return html.Div(
+        [
+            html.Div(
+                [
+                    _num_input(
+                        "opt-cmaes-restarts", "Restarts", project.cmaes_restarts,
+                        "Max IPOP restarts (CMA-ES only): each trigger restarts the optimizer "
+                        "with the population multiplied by 'Pop growth'. 0 = a stall stops the "
+                        "run instead. Set generously for 'Run until converged'.",
+                    ),
+                    _num_input(
+                        "opt-stall-generations", "Stall gens", project.stall_generations,
+                        "Consecutive generations without a best-score improvement that trigger "
+                        "a restart (or stop the run when Restarts = 0). 0 = off. Not needed as "
+                        "a trigger when 'Restart on convergence' is checked.",
+                    ),
+                    _num_input(
+                        "opt-inc-popsize", "Pop growth", project.cmaes_inc_popsize,
+                        "Population multiplier applied at each IPOP restart (default 2). The "
+                        "internal CMA population grows past Parallel; one CMA update then "
+                        "spans several generations — expected.",
+                        min_val=1,
+                    ),
+                    html.Div(
+                        dcc.Checklist(
+                            id="opt-restart-flags",
+                            options=[
+                                {"label": " Restart on convergence", "value": "conv"},
+                                {"label": " Warm restarts", "value": "warm"},
+                                {"label": " Dedup identical trials", "value": "dedup"},
+                            ],
+                            value=flags,
+                            className="mt-4",
+                            inputClassName="me-1",
+                            labelClassName="me-3",
+                        ),
+                        title="Restart on convergence: trigger restarts on CMA-ES's own convergence "
+                              "signal instead of the stall plateau — recommended whenever Restarts > 0 "
+                              "(the plateau fires while the search is still productive). "
+                              "Warm restarts: re-seed each restart from the best-so-far with an "
+                              "inflated spread instead of a random point. "
+                              "Dedup: reuse the recorded score when the exact same parameter vector "
+                              "reappears — only safe for a DETERMINISTIC objective.",
+                    ),
+                ],
+                className="d-flex align-items-start flex-wrap",
+            ),
+        ],
+        className="mt-2",
+    )
+
+
 def _build_sampler_controls() -> html.Div:
     """Optimizer-settings row: sampler, initial design, margin, parallelism.
 
@@ -67,6 +147,9 @@ def _build_sampler_controls() -> html.Div:
                             ),
                         ],
                         className="col-12 col-md-4",
+                        title="The optimization algorithm. CMA-ES adapts a covariance and handles "
+                              "coupled parameters; GP-BO is the most sample-efficient for expensive "
+                              "sims (small batches); TPE is a Bayesian alternative; Random is the baseline.",
                     ),
                     html.Div(
                         [
@@ -82,6 +165,9 @@ def _build_sampler_controls() -> html.Div:
                             ),
                         ],
                         className="col-12 col-md-3",
+                        title="How the startup trials (before the sampler takes over) are placed: "
+                              "Sobol' fills the space evenly — recommended for a broad search; "
+                              "Random is plain uniform.",
                     ),
                     html.Div(
                         [
@@ -103,6 +189,10 @@ def _build_sampler_controls() -> html.Div:
                             ),
                         ],
                         className="col-12 col-md-3",
+                        title="Parallel = trials per generation (also the CMA-ES population size). "
+                              "Gens = generation budget; with 'Run until converged' it is a safety "
+                              "ceiling, not a target. Concurrent SOFA processes stay capped by "
+                              "max_active_sofa_procs regardless.",
                     ),
                     html.Div(
                         [
@@ -124,27 +214,46 @@ def _build_sampler_controls() -> html.Div:
                             ),
                         ],
                         className="col-12 col-md-3",
+                        title="Multi-fidelity step pruning: at calibrated rungs the generation's "
+                              "candidates are ranked by their anytime partial score and the bottom "
+                              "are stopped early. Shadow only LOGS would-kill decisions (risk-free "
+                              "dry run); Kill actually stops them.",
                     ),
                     html.Div(
                         [
-                            dcc.Checklist(
-                                id="opt-cmaes-margin",
-                                options=[{"label": " CMA-ES with Margin", "value": "margin"}],
-                                value=["margin"] if project.cmaes_with_margin else [],
-                                className="mt-4",
+                            html.Div(
+                                dcc.Checklist(
+                                    id="opt-cmaes-margin",
+                                    options=[{"label": " CMA-ES with Margin", "value": "margin"}],
+                                    value=["margin"] if project.cmaes_with_margin else [],
+                                    className="mt-4",
+                                ),
+                                title="Margin variant of CMA-ES: keeps sampling diversity when many "
+                                      "parameters are integers/discrete. Only applies to CMA-ES.",
                             ),
-                            dcc.Checklist(
-                                id="opt-run-until-converged",
-                                options=[{"label": " Run until converged", "value": "converged"}],
-                                value=["converged"] if project.run_until_converged else [],
-                                className="mt-1",
+                            html.Div(
+                                dcc.Checklist(
+                                    id="opt-run-until-converged",
+                                    options=[{"label": " Run until converged", "value": "converged"}],
+                                    value=["converged"] if project.run_until_converged else [],
+                                    className="mt-1",
+                                ),
+                                title="Self-size the run: keep restarting on each stall/convergence "
+                                      "and stop once 'patience' consecutive restarts fail to improve "
+                                      "the best score. Gens becomes a ceiling. Needs CMA-ES, "
+                                      "Restarts > 0 and a restart trigger.",
                             ),
-                            dcc.Input(
-                                id="opt-restart-patience", type="number", min=1, step=1,
-                                value=project.restart_patience,
-                                className="form-control form-control-sm mt-1",
-                                style={"width": "80px"},
-                                placeholder="patience",
+                            html.Div(
+                                dcc.Input(
+                                    id="opt-restart-patience", type="number", min=1, step=1,
+                                    value=project.restart_patience,
+                                    className="form-control form-control-sm mt-1",
+                                    style={"width": "80px"},
+                                    placeholder="patience",
+                                ),
+                                title="Patience: consecutive restarts without a new global best "
+                                      "tolerated before the run stops (only used with 'Run until "
+                                      "converged'). A restart that improves the best resets the streak.",
                             ),
                         ],
                         className="col-12 col-md-3",
@@ -152,10 +261,12 @@ def _build_sampler_controls() -> html.Div:
                 ],
                 className="row g-2 align-items-start",
             ),
+            _build_restart_controls(project),
             html.Small(
                 "GP-BO is most sample-efficient with a small batch — try Parallel ≈ 4. "
                 "Margin only applies to CMA-ES. ‘Run until converged’ ignores Gens as a "
-                "target and stops once restarts stop improving (needs CMA-ES + restarts).",
+                "target and stops once restarts stop improving (needs CMA-ES + restarts). "
+                "Hover any control for details.",
                 className="text-muted",
             ),
         ],
@@ -182,12 +293,18 @@ def _test_row(name: str, spec, pre_selected: bool, weight: int) -> html.Div:
                 style={"display": "inline-flex", "alignItems": "center", "minWidth": "200px", "flexShrink": 0},
                 className="me-2",
             ),
-            dcc.Checklist(
-                id={"type": "gate-check", "test": name},
-                options=[{"label": " Gate", "value": name}],
-                value=[],
-                style={"display": "inline-flex", "alignItems": "center", "minWidth": "90px", "flexShrink": 0},
-                className="me-2 text-muted",
+            html.Div(
+                dcc.Checklist(
+                    id={"type": "gate-check", "test": name},
+                    options=[{"label": " Gate", "value": name}],
+                    value=[],
+                    style={"display": "inline-flex", "alignItems": "center", "minWidth": "90px", "flexShrink": 0},
+                    className="me-2 text-muted",
+                ),
+                title="Gated: this test only runs after one of the ungated tests succeeds in "
+                      "the same trial — skips an expensive secondary test when the primary "
+                      "already failed. Only useful with several tests; at least one must stay ungated.",
+                style={"flexShrink": 0},
             ),
             html.Div(
                 dcc.Slider(
@@ -250,8 +367,16 @@ def build_run_tab(catalog: dict) -> html.Div:
                             html.Div(id="run-scene-status", className="mb-2 small"),
                             html.Div(
                                 [
-                                    html.Button("Equal split", id="opt-equal-btn", n_clicks=0, className="btn btn-outline-secondary btn-sm me-2"),
-                                    html.Button("Normalize", id="opt-normalize-btn", n_clicks=0, className="btn btn-outline-secondary btn-sm"),
+                                    html.Button(
+                                        "Equal split", id="opt-equal-btn", n_clicks=0,
+                                        className="btn btn-outline-secondary btn-sm me-2",
+                                        title="Reset the selected tests' weights to an even split (sums to 100%).",
+                                    ),
+                                    html.Button(
+                                        "Normalize", id="opt-normalize-btn", n_clicks=0,
+                                        className="btn btn-outline-secondary btn-sm",
+                                        title="Rescale the current weights proportionally so they sum to 100%.",
+                                    ),
                                 ],
                                 className="mb-3",
                             ),
@@ -261,6 +386,9 @@ def build_run_tab(catalog: dict) -> html.Div:
                     html.Div(
                         dcc.Graph(id="opt-pie", config={"displayModeBar": False}, style={"height": "320px"}),
                         className="col-12 col-md-5",
+                        title="Objective composition: each selected test's weight share of the "
+                              "final score. A configuration view (what you are asking the "
+                              "optimizer to maximize), not a results view.",
                     ),
                 ],
                 className="row g-3 mb-3",

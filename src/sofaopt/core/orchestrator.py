@@ -90,19 +90,26 @@ def _apply_env_overrides(project: SofaOptProject) -> SofaOptProject:
     seed = os.environ.get(envkeys.SEED_SAMPLER)
     if seed in ("random", "sobol"):
         overrides["seed_sampler"] = seed
-    margin = os.environ.get(envkeys.CMAES_MARGIN)
-    if margin is not None:
-        overrides["cmaes_with_margin"] = margin.strip().lower() in ("1", "true", "yes", "on")
-    converged = os.environ.get(envkeys.RUN_UNTIL_CONVERGED)
-    if converged is not None:
-        overrides["run_until_converged"] = converged.strip().lower() in ("1", "true", "yes", "on")
     prune = os.environ.get(envkeys.PRUNE_MODE)
     if prune in ("off", "shadow", "kill"):
         overrides["prune_mode"] = prune
     for key, field in (
+        (envkeys.CMAES_MARGIN, "cmaes_with_margin"),
+        (envkeys.RUN_UNTIL_CONVERGED, "run_until_converged"),
+        (envkeys.RESTART_ON_CONVERGENCE, "restart_on_convergence"),
+        (envkeys.WARM_RESTARTS, "warm_restarts"),
+        (envkeys.DEDUP_TRIALS, "dedup_trials"),
+    ):
+        raw = os.environ.get(key)
+        if raw is not None:
+            overrides[field] = raw.strip().lower() in ("1", "true", "yes", "on")
+    for key, field in (
         (envkeys.N_PARALLEL, "n_parallel"),
         (envkeys.N_GENERATIONS, "n_generations"),
         (envkeys.RESTART_PATIENCE, "restart_patience"),
+        (envkeys.CMAES_RESTARTS, "cmaes_restarts"),
+        (envkeys.STALL_GENERATIONS, "stall_generations"),
+        (envkeys.CMAES_INC_POPSIZE, "cmaes_inc_popsize"),
     ):
         raw = os.environ.get(key)
         if raw:
