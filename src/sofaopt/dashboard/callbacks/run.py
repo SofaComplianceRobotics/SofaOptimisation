@@ -81,7 +81,7 @@ def _converged_error(sampler, run_until_converged, restart_patience) -> str | No
 def _optimizer_env(
     test_names, test_weights, gated_names,
     sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
-    run_until_converged=None, restart_patience=None,
+    run_until_converged=None, restart_patience=None, prune_mode=None,
 ) -> dict:
     """Environment for the optimizer subprocess: selection + setting overrides."""
     env = os.environ.copy()
@@ -89,6 +89,8 @@ def _optimizer_env(
     env[envkeys.TEST_WEIGHTS] = json.dumps(test_weights)
     if gated_names:
         env[envkeys.GATED_TESTS] = ",".join(gated_names)
+    if prune_mode:
+        env[envkeys.PRUNE_MODE] = str(prune_mode)
 
     # Optimizer-setting overrides → honored by run_optimization before build_study.
     if sampler:
@@ -244,7 +246,7 @@ def _do_scene_preview() -> str:
 def _do_run_or_pause(
     check_vals, check_ids, gate_vals, gate_ids, store,
     sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
-    run_until_converged, restart_patience,
+    run_until_converged, restart_patience, prune_mode,
 ) -> str:
     """Start/Resume (validate + launch) or Pause, per the triggering button."""
     if ctx.triggered_id == "opt-stop-btn":
@@ -266,7 +268,7 @@ def _do_run_or_pause(
     return start_optimize(_optimizer_env(
         test_names, test_weights, gated_names,
         sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
-        run_until_converged, restart_patience,
+        run_until_converged, restart_patience, prune_mode,
     ))
 
 
@@ -348,17 +350,18 @@ def register_run_callbacks(app) -> None:
         State("opt-n-generations", "value"),
         State("opt-run-until-converged", "value"),
         State("opt-restart-patience", "value"),
+        State("opt-prune-mode", "value"),
         prevent_initial_call=True,
     )
     def handle_optimise(
         _, __, check_vals, check_ids, gate_vals, gate_ids, store,
         sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
-        run_until_converged, restart_patience,
+        run_until_converged, restart_patience, prune_mode,
     ):
         return _do_run_or_pause(
             check_vals, check_ids, gate_vals, gate_ids, store,
             sampler, seed_sampler, cmaes_margin, n_parallel, n_generations,
-            run_until_converged, restart_patience,
+            run_until_converged, restart_patience, prune_mode,
         )
 
     register_log_view(

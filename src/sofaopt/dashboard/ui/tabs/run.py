@@ -41,6 +41,11 @@ def _build_sampler_controls() -> html.Div:
     drives the same knobs as the ``sofaopt`` CLI flags.
     """
     project = context.project()
+    prunable = (
+        len(project.tests) == 1
+        and project.tests[0].prunable
+        and bool(project.tests[0].prune_rungs)
+    )
     return html.Div(
         [
             html.H5("Optimizer", className="mb-2"),
@@ -95,6 +100,27 @@ def _build_sampler_controls() -> html.Div:
                                     ),
                                 ],
                                 className="d-flex",
+                            ),
+                        ],
+                        className="col-12 col-md-3",
+                    ),
+                    html.Div(
+                        [
+                            html.Label("Pruning", className="form-label mb-1 small text-muted"),
+                            dcc.Dropdown(
+                                id="opt-prune-mode",
+                                options=[
+                                    {"label": "Off", "value": "off"},
+                                    {"label": "Shadow (dry-run, logs only)", "value": "shadow"},
+                                    {"label": "Kill (stop laggards early)", "value": "kill"},
+                                ],
+                                value=project.prune_mode if prunable else "off",
+                                clearable=False,
+                                disabled=not prunable,
+                            ),
+                            html.Small(
+                                "" if prunable else "Needs one prunable test with calibrated rungs.",
+                                className="text-muted",
                             ),
                         ],
                         className="col-12 col-md-3",

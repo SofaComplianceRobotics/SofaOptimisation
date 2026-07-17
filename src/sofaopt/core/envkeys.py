@@ -41,3 +41,4 @@ N_PARALLEL = "OPT_N_PARALLEL"              # int override for project.n_parallel
 N_GENERATIONS = "OPT_N_GENERATIONS"        # int override for project.n_generations
 RUN_UNTIL_CONVERGED = "OPT_RUN_UNTIL_CONVERGED"  # "1"/"true" for self-sizing restart-driven stop
 RESTART_PATIENCE = "OPT_RESTART_PATIENCE"  # int override for project.restart_patience
+PRUNE_MODE = "OPT_PRUNE_MODE"              # "off" | "shadow" | "kill" (multi-fidelity pruning)

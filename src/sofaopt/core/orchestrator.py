@@ -96,6 +96,9 @@ def _apply_env_overrides(project: SofaOptProject) -> SofaOptProject:
     converged = os.environ.get(envkeys.RUN_UNTIL_CONVERGED)
     if converged is not None:
         overrides["run_until_converged"] = converged.strip().lower() in ("1", "true", "yes", "on")
+    prune = os.environ.get(envkeys.PRUNE_MODE)
+    if prune in ("off", "shadow", "kill"):
+        overrides["prune_mode"] = prune
     for key, field in (
         (envkeys.N_PARALLEL, "n_parallel"),
         (envkeys.N_GENERATIONS, "n_generations"),
