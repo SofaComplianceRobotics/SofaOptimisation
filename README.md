@@ -52,6 +52,17 @@ You write one `project.py` and one or more `scene.py` files.
 
 ## Run
 
+From a terminal — no `run.py` needed:
+
+```bash
+sofaopt path/to/project.py                       # headless (resumes if study.db exists)
+sofaopt path/to/project.py --sampler tpe --parallel 8 --gens 50
+sofaopt path/to/project.py --prune-mode shadow   # multi-fidelity dry-run
+# also: python -m sofaopt path/to/project.py ...
+```
+
+Or from Python:
+
 ```python
 from sofaopt import run_optimization, launch_dashboard
 from project import PROJECT
@@ -60,6 +71,9 @@ run_optimization(PROJECT)            # headless
 # or
 launch_dashboard(PROJECT, port=8050) # web UI
 ```
+
+A run started any of these ways writes one log at `work_dir/logs/optimize.log`,
+so the dashboard's log window tails it whichever way the run was launched.
 
 ## Optimizer settings
 
@@ -138,25 +152,26 @@ At the end of the run a summary video is generated from the top+bottom trials.
 launch_dashboard(PROJECT, port=8050)
 ```
 
-The web UI provides:
+The web UI tabs are **Run · Monitor · Results · Parameters · (Pareto) · Archives**:
 
-- **Performance graph** — score over trials, click any point to select it
-- **"Test it" button** — click a trial in the graph then press "Test it" to launch
-  `runSofa -g imgui` with that trial's params and the scene its first run used
-  (loads `SofaImGui` automatically). Useful for visually inspecting a candidate.
-  Viewer windows are attached to a kill-on-close job, so they never outlive the
-  dashboard; the headless optimization run itself is *not* — it survives closing
-  the dashboard.
-- **"View recording" link** — if the trial has a recorded `trial.mp4`, a direct link
-  appears next to the "Test it" button.
-- **"Generate Summary" button** — concatenates the top+bottom trial recordings into a
-  single summary MP4.
-- **Run controls** — Run, **Pause/Resume** (pausing tree-kills in-flight SOFA
-  processes; resuming re-evaluates the interrupted trials, which are excluded
-  from rankings), and **Stop & archive current run**.
-- **Live leaderboard, progress, parameter bounds, importance/interactions
-  (fANOVA), and Pareto front** tabs.
-- **Archives tab** — archive the current run (with a name and notes), restore or
+- **Run** — the single place to launch work. Lists the project's tests once;
+  each row has a **Preview** button (opens that scene in an interactive
+  `runSofa -g imgui` window — viewer windows die with the dashboard; the headless
+  run does not), a **Gate** toggle, and a **weight** slider. Below: the optimizer
+  settings (sampler, initial design, parallelism, CMA-ES margin, run-until-converged,
+  **pruning** mode), **Start / Pause / Resume** (pausing tree-kills in-flight SOFA
+  processes; resuming re-evaluates the interrupted trials, which are excluded from
+  rankings), and a shared **log window** with an All / Warnings / Errors filter that
+  tails the run — including one started from the `sofaopt` CLI.
+- **Monitor** — live per-generation trial grid, restart status, jump-to-running.
+- **Results** — score-over-trials graph (click a point to select a trial), a
+  per-trial detail panel with **"Test it"** (re-launch that trial's params in a
+  viewer) and **"View recording"** / **"Generate Summary"** video controls, the
+  live leaderboard, and the optimization-health panel.
+- **Parameters** — a table of every parameter (including *frozen* ones), the
+  sampled-value bounds heatmap, and (single-objective) fANOVA importance +
+  interaction map.
+- **Archives** — archive the current run (with a name and notes), restore or
   delete archives, and **compare runs**: overlaid best-so-far convergence curves
   plus a summary and best-params diff table.
 
