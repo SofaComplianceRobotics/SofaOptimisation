@@ -22,3 +22,8 @@ examples/prefix_pruning_study/runs/
 .DS_Store
 .idea/
 .vscode/
+*.code-workspace
+
+# Local tooling state (language servers, editors, assistants)
+.serena/
+.claude/
