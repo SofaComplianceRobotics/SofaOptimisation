@@ -58,8 +58,12 @@ Practical constraints, all enforced or wired by the framework:
 - Pruned trials are considered by the sampler (`consider_pruned_trials=True`),
   so a run killed by the timeout backstop doesn't stall the update.
 
-**When it breaks:** very small budgets (it needs generations to adapt), and
-low-cardinality integer parameters — see the margin variant next.
+**When it breaks:** very small budgets (it needs generations to adapt),
+low-cardinality integer parameters (see the margin variant next), and
+multimodal landscapes — a converged searchlight is stuck in one basin. For
+the latter, pair `stall_generations` with `cmaes_restarts` (§5): stagnation
+then triggers an IPOP restart (fresh CMA-ES, doubled population) instead of
+ending the run.
 
 ### CMA-ES with Margin — `cmaes_with_margin=True`
 
@@ -248,6 +252,36 @@ Crashed repeats among successful ones count as **0.0** within their test (the
 candidate is penalized, not discarded) — see §7 for what happens when *all*
 runs fail.
 
+### `run_count_min` — adaptive re-evaluation (racing)
+
+A fixed `run_count` spends the same simulation budget on a hopeless candidate
+as on a contender. Racing spends repeats where they matter:
+
+**Intuition.** After a few repeats you know a candidate's score *roughly* — a
+mean and a confidence interval. If even the optimistic end of that interval
+cannot reach the best score seen so far, more repeats cannot change the
+ranking at the top, so stop measuring. Only candidates whose interval
+*overlaps the incumbent* — the ones the sampler actually needs to rank
+precisely — earn the full repeat count.
+
+**Mechanics.** `TestSpec(run_count=6, run_count_min=2)` launches 2 repeats
+per trial; once they finish, repeats are added one at a time while
+`mean + t₉₅·s/√n` (propagated through the real normalize/weight pipeline,
+clamping included) still reaches `study.best_value`. Skipped repeats show as
+`skipped` run slots with the racing reason. Fine print:
+
+- **`score_aggregation="mean"` only** (enforced): with `sum` /
+  `exponential_coverage` the repeats are *different scenarios* — skipping
+  some would change what the score measures, not its precision.
+- A potential **new incumbent keeps running** to its full `run_count`: every
+  later racing decision compares against its score, so it must be precise.
+- Generation 1 has no incumbent — every candidate runs its full count and
+  becomes the baseline.
+- Crashed repeats count as 0.0 (as in final scoring), so crash-riddled
+  candidates race out quickly. Multi-objective runs ignore racing (no scalar
+  incumbent). Works together with `gated=True`: a gate-opened raced test
+  still starts at `run_count_min`.
+
 ### `dedup_trials` — don't re-simulate identical candidates
 
 With integer/bool-heavy spaces or `float_step` quantization, a converged
@@ -265,6 +299,30 @@ generations without any improvement of the best score. Post-run steps (summary
 video, report) still execute. Single-objective only. Pair a generous
 `n_generations` with `stall_generations=10–20` and let convergence, not the
 clock, decide.
+
+### `cmaes_restarts` — restart instead of stopping (IPOP)
+
+On a **multimodal** landscape a stalled CMA-ES usually means "converged into
+one basin", not "nothing left to find". The standard answer (IPOP, Auger &
+Hansen 2005) is to restart with a larger population, which searches more
+globally each time. `cmaes_restarts=N` re-purposes the stall signal: the
+first N stalls each swap in a **fresh** CMA-ES with
+
+- population size × `cmaes_inc_popsize` (default 2 — the IPOP schedule),
+- the initial `cmaes_sigma0` (full initial spread again),
+- a uniform-random start point (a different one per restart, reproducible).
+
+The run-global best is never forgotten — the study keeps every trial, and a
+restart must beat the incumbent within `stall_generations` generations or
+the next stall fires (restarting again, or stopping once the budget of N is
+spent). `n_generations` still caps the total run. Requires
+`stall_generations > 0` and `sampler="cmaes"`; single-objective only.
+Resuming a paused run continues from the latest restart's state.
+
+Note: Optuna deprecated its own `restart_strategy` in v4.4, so sofaopt
+implements the restart at the orchestrator level (`core/restart.py`) — the
+growing population means one internal CMA update spans several sofaopt
+generations, which is expected.
 
 ## 6. How scores combine — and one objective vs many
 

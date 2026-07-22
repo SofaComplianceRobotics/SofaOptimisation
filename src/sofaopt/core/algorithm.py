@@ -10,6 +10,7 @@ import optuna
 
 import statistics
 
+from sofaopt.core.restart import build_restart_sampler, restart_index, restart_popsize
 from sofaopt.core.runconfig import RunConfig
 from sofaopt.core.scoring import aggregate_repeats, combine_weighted
 from sofaopt.core.trial_state import (
@@ -39,6 +40,46 @@ def _seed_sampler(project) -> optuna.samplers.BaseSampler:
     return optuna.samplers.RandomSampler()
 
 
+def _cmaes_sampler(project, startup_trials: int) -> optuna.samplers.CmaEsSampler:
+    # Center the search on the ParamSpec defaults (the documented contract).
+    # Only float/int non-frozen params are in the CMA-ES space; bools are
+    # categorical and handled by the independent sampler.
+    x0 = {
+        p.name: min(max(p.default, p.low), p.high)
+        for p in project.params
+        if not p.is_frozen and p.type in ("float", "int")
+    }
+    return optuna.samplers.CmaEsSampler(
+        x0=x0 or None,
+        sigma0=project.cmaes_sigma0,
+        popsize=project.n_parallel,
+        n_startup_trials=startup_trials,
+        consider_pruned_trials=True,
+        with_margin=project.cmaes_with_margin,
+        independent_sampler=_seed_sampler(project),
+    )
+
+
+def _single_objective_sampler(project) -> optuna.samplers.BaseSampler:
+    startup_trials = project.resolve_startup_trials()
+    if project.cmaes_startup_trials is None and project.sampler in ("cmaes", "gp"):
+        searched = sum(1 for p in project.params if not p.is_frozen)
+        logger.info(
+            f"[sampler] startup trials auto-sized to {startup_trials} "
+            f"({searched} searched params, sampler={project.sampler})"
+        )
+    if project.sampler == "cmaes":
+        return _cmaes_sampler(project, startup_trials)
+    if project.sampler == "gp":
+        return optuna.samplers.GPSampler(
+            n_startup_trials=startup_trials,
+            independent_sampler=_seed_sampler(project),
+        )
+    if project.sampler == "tpe":
+        return optuna.samplers.TPESampler()
+    return optuna.samplers.RandomSampler()
+
+
 def build_study(db_path: Path, cfg: RunConfig, resume: bool = False) -> optuna.Study:
     """Create (or resume) an Optuna study backed by a SQLite database.
 
@@ -48,8 +89,9 @@ def build_study(db_path: Path, cfg: RunConfig, resume: bool = False) -> optuna.S
     (``project.seed_sampler == "sobol"``).
 
     When ``resume`` is True an existing database at ``db_path`` is **loaded**
-    (prior trials are kept; CMA-ES state persists in storage). When False, any
-    existing database is deleted so the run starts fresh.
+    (prior trials are kept; CMA-ES state persists in storage — including the
+    latest IPOP restart, see :func:`_restore_restart_sampler`). When False,
+    any existing database is deleted so the run starts fresh.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     if db_path.exists() and not resume:
@@ -60,58 +102,37 @@ def build_study(db_path: Path, cfg: RunConfig, resume: bool = False) -> optuna.S
     storage = optuna.storages.RDBStorage(f"sqlite:///{db_path}")
 
     if project.multi_objective:
-        directions = [t.direction for t in cfg.selected_tests]
-        sampler = optuna.samplers.NSGAIISampler(population_size=project.n_parallel)
         return optuna.create_study(
             study_name=project.name,
-            sampler=sampler,
-            directions=directions,
+            sampler=optuna.samplers.NSGAIISampler(population_size=project.n_parallel),
+            directions=[t.direction for t in cfg.selected_tests],
             storage=storage,
             load_if_exists=resume,
         )
 
-    startup_trials = project.resolve_startup_trials()
-    if project.cmaes_startup_trials is None and project.sampler in ("cmaes", "gp"):
-        searched = sum(1 for p in project.params if not p.is_frozen)
-        logger.info(
-            f"[sampler] startup trials auto-sized to {startup_trials} "
-            f"({searched} searched params, sampler={project.sampler})"
-        )
-
-    if project.sampler == "cmaes":
-        # Center the search on the ParamSpec defaults (the documented contract).
-        # Only float/int non-frozen params are in the CMA-ES space; bools are
-        # categorical and handled by the independent sampler.
-        x0 = {
-            p.name: min(max(p.default, p.low), p.high)
-            for p in project.params
-            if not p.is_frozen and p.type in ("float", "int")
-        }
-        sampler = optuna.samplers.CmaEsSampler(
-            x0=x0 or None,
-            sigma0=project.cmaes_sigma0,
-            popsize=project.n_parallel,
-            n_startup_trials=startup_trials,
-            consider_pruned_trials=True,
-            with_margin=project.cmaes_with_margin,
-            independent_sampler=_seed_sampler(project),
-        )
-    elif project.sampler == "gp":
-        sampler = optuna.samplers.GPSampler(
-            n_startup_trials=startup_trials,
-            independent_sampler=_seed_sampler(project),
-        )
-    elif project.sampler == "tpe":
-        sampler = optuna.samplers.TPESampler()
-    else:
-        sampler = optuna.samplers.RandomSampler()
-
-    return optuna.create_study(
+    study = optuna.create_study(
         study_name=project.name,
-        sampler=sampler,
+        sampler=_single_objective_sampler(project),
         direction="maximize",
         storage=storage,
         load_if_exists=resume,
+    )
+    if resume and project.sampler == "cmaes":
+        _restore_restart_sampler(study, project)
+    return study
+
+
+def _restore_restart_sampler(study: optuna.Study, project) -> None:
+    """A resumed run that had IPOP-restarted must keep sampling from its
+    latest restart: the restart-scoped sampler makes the pre-restart CMA
+    state invisible (see ``core/restart.py``)."""
+    index = restart_index(study)
+    if index <= 0:
+        return
+    study.sampler = build_restart_sampler(project, index, _seed_sampler(project))
+    logger.info(
+        f"[resume] Continuing from IPOP restart {index} "
+        f"(popsize {restart_popsize(project, index)})."
     )
 
 
@@ -201,37 +222,40 @@ def _read_run_results(trial_state_path: Path, runs: list[tuple]) -> list[tuple]:
     return results
 
 
+def _one_test_details(cfg: RunConfig, test_name: str, run_results: list[tuple]) -> dict:
+    """Aggregate one test's run scores into its trial-summary details dict."""
+    raw_scores = [s for name, s, _ in run_results if name == test_name]
+    scores_for_test = [0.0 if s == float("-inf") else s for s in raw_scores]
+    crashed_runs = sum(1 for s in raw_scores if s == float("-inf"))
+    test_aggregate = aggregate_repeats(
+        scores_for_test, cfg.test_aggregations.get(test_name, "mean")
+    )
+    max_score = cfg.test_max_scores.get(test_name, 1.0)
+    test_run_total = next(
+        (rt for name, _, rt in run_results if name == test_name and rt is not None),
+        len(scores_for_test),
+    )
+    return {
+        "run_count": len(scores_for_test),
+        "crashed_run_count": crashed_runs,
+        "run_scores": [round(s, 4) for s in scores_for_test],
+        "aggregate_score": round(test_aggregate, 4),
+        "median_score": round(statistics.median(scores_for_test), 4),
+        "run_total": test_run_total,
+        "max_score": max_score,
+        "weight_pct": round(cfg.test_weights.get(test_name, 0.0) * 100, 1),
+        "normalized_score": round(
+            min(test_aggregate / max_score, 1.0) if max_score > 0 else 0.0, 4
+        ),
+    }
+
+
 def _aggregate_per_test(cfg: RunConfig, run_results: list[tuple]):
     """Aggregate run scores per test -> (test names in first-seen order, details)."""
-    test_names_in_order: list[str] = []
-    per_test_details: dict[str, dict] = {}
-    for test_name in dict.fromkeys(name for name, _, _ in run_results if name):
-        raw_scores = [s for name, s, _ in run_results if name == test_name]
-        scores_for_test = [0.0 if s == float("-inf") else s for s in raw_scores]
-        crashed_runs = sum(1 for s in raw_scores if s == float("-inf"))
-        test_names_in_order.append(test_name)
-        test_aggregate = aggregate_repeats(
-            scores_for_test, cfg.test_aggregations.get(test_name, "mean")
-        )
-        test_median = statistics.median(scores_for_test)
-        max_score = cfg.test_max_scores.get(test_name, 1.0)
-        test_run_total = next(
-            (rt for name, _, rt in run_results if name == test_name and rt is not None),
-            len(scores_for_test),
-        )
-        per_test_details[test_name] = {
-            "run_count": len(scores_for_test),
-            "crashed_run_count": crashed_runs,
-            "run_scores": [round(s, 4) for s in scores_for_test],
-            "aggregate_score": round(test_aggregate, 4),
-            "median_score": round(test_median, 4),
-            "run_total": test_run_total,
-            "max_score": max_score,
-            "weight_pct": round(cfg.test_weights.get(test_name, 0.0) * 100, 1),
-            "normalized_score": round(
-                min(test_aggregate / max_score, 1.0) if max_score > 0 else 0.0, 4
-            ),
-        }
+    test_names_in_order = list(dict.fromkeys(name for name, _, _ in run_results if name))
+    per_test_details = {
+        name: _one_test_details(cfg, name, run_results) for name in test_names_in_order
+    }
     return test_names_in_order, per_test_details
 
 
@@ -314,8 +338,6 @@ def _finalize_trial_score(
     Returns the final score out of 100, or the project's ``hard_fail_score``
     only when every run failed (partial failures are isolated per test).
     """
-    test_names = list(cfg.selected_names)
-
     trial_state = read_trial_state(trial_state_path)
     if not isinstance(trial_state, dict):
         trial_state = {}
@@ -340,6 +362,19 @@ def _finalize_trial_score(
             per_test_details, run_results, valid_scores,
         )
 
+    return _tell_single_objective(
+        cfg, trial, study, trial_index, gen_index, trial_state_path,
+        test_names_in_order, per_test_details, run_results, valid_scores,
+    )
+
+
+def _tell_single_objective(
+    cfg, trial, study, trial_index, gen_index, trial_state_path,
+    test_names_in_order, per_test_details, run_results, valid_scores,
+) -> float:
+    """Single-objective path: gate, weight, combine, tell, write the summary."""
+    test_names = list(cfg.selected_names)
+    run_scores = [s for _, s, _ in run_results]
     counted_names, counted_weights, gate_open = _gate_and_weight(
         cfg, test_names_in_order, per_test_details
     )

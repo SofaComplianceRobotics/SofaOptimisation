@@ -12,7 +12,8 @@ import time
 from pathlib import Path
 
 from sofaopt.core import envkeys
-from sofaopt.core.algorithm import build_study, recover_interrupted_trials
+from sofaopt.core.algorithm import _seed_sampler, build_study, recover_interrupted_trials
+from sofaopt.core.restart import maybe_restart
 from sofaopt.core.runlock import acquire_run_lock, release_run_lock
 from sofaopt.core.generation.runner import run_generation
 from sofaopt.core.generation.types import RunHistory
@@ -248,7 +249,9 @@ def _apply_overlays_safely(project: SofaOptProject, gen: int) -> None:
 
 
 class _StallTracker:
-    """Early stop: no best-score improvement for ``limit`` generations in a row.
+    """Stagnation signal: no best-score improvement for ``limit`` generations
+    in a row. The orchestrator then stops the run — or, when the project has
+    ``cmaes_restarts`` left, performs an IPOP restart and resets the patience.
 
     A generation without a valid best (all trials failed) counts as stalled.
     Disabled when ``limit`` is 0 (also used for multi-objective runs, where a
@@ -272,6 +275,11 @@ class _StallTracker:
             return False
         self.count += 1
         return self.count >= self.limit
+
+    def reset(self) -> None:
+        """A restart is a fresh attempt: give it the full patience again (it
+        still has to beat the run-global best to be counted as improving)."""
+        self.count = 0
 
 
 def _run(project: SofaOptProject, cfg: RunConfig) -> None:
@@ -313,6 +321,9 @@ def _run(project: SofaOptProject, cfg: RunConfig) -> None:
         prune_count = _maybe_prune_recordings(project, gen, prune_count)
 
         if stall.should_stop(study):
+            if maybe_restart(study, project, _seed_sampler(project)):
+                stall.reset()
+                continue
             logger.info(
                 f"[stall] Best score unchanged for {stall.count} generations "
                 f"— stopping early at generation {gen}/{total_gens}."

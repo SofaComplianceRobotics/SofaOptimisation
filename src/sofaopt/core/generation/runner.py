@@ -64,14 +64,12 @@ def run_generation(
             env=env,
             state=state,
             gen_dir=gen_dir,
-            trial_state_paths_by_trial=trial_state_paths_by_trial,
         )
         finalize_generation(
             cfg,
             gen_index=gen_index,
             study=study,
             state=state,
-            env=env,
             gen_dir=gen_dir,
             trial_state_paths_by_trial=trial_state_paths_by_trial,
             launch_result=launch_result,
