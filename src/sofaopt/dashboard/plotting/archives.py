@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 import plotly.graph_objects as go
 
 from .colors import ARCHIVE_COLORS, C_BG
@@ -48,6 +50,25 @@ def build_comparison_figure(
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
         uirevision="archive-compare",
     )
+    # Restart markers only make sense against a single run's trial axis —
+    # overlaying multiple runs' restart positions on one x-axis would mislead.
+    if len(entries) == 1:
+        _add_comparison_restart_markers(fig, entries[0])
     if not fig.data:
         fig.add_annotation(text="No completed trials in the selected runs")
     return fig
+
+
+def _add_comparison_restart_markers(fig: go.Figure, entry: dict) -> None:
+    """Dotted restart vlines for a single-run comparison (best-effort)."""
+    with contextlib.suppress(Exception):  # cosmetic only
+        for ev in entry.get("restarts") or []:
+            fig.add_vline(
+                x=ev["trial_chron"],
+                line_dash="dot",
+                line_color="#868e96",
+                opacity=0.6,
+                annotation_text=f"restart {ev['restart_index']}",
+                annotation_position="top",
+                annotation_font_size=10,
+            )

@@ -60,13 +60,17 @@ def test_restart_config_validation(tmp_path):
         _project(tmp_path, cmaes_inc_popsize=0)
 
 
+def _restart(study, project, sampler, *, gen=1, trial_chron=0):
+    return maybe_restart(study, project, sampler, gen=gen, trial_chron=trial_chron)
+
+
 def test_maybe_restart_only_applies_to_single_objective_cmaes(tmp_path):
     study = optuna.create_study(direction="maximize")
     rs = optuna.samplers.RandomSampler()
     off = _project(tmp_path, cmaes_restarts=0, stall_generations=2)
-    assert not maybe_restart(study, off, rs)
+    assert _restart(study, off, rs) is None
     gp = _project(tmp_path, sampler="gp")
-    assert not maybe_restart(study, gp, rs)
+    assert _restart(study, gp, rs) is None
     multi = _project(
         tmp_path,
         multi_objective=True,
@@ -75,7 +79,7 @@ def test_maybe_restart_only_applies_to_single_objective_cmaes(tmp_path):
             TestSpec("u", scene_file=tmp_path / "s.py"),
         ],
     )
-    assert not maybe_restart(study, multi, rs)
+    assert _restart(study, multi, rs) is None
 
 
 def test_random_x0_deterministic_and_in_bounds(tmp_path):
@@ -111,7 +115,7 @@ def test_restart_swaps_in_fresh_scoped_cma(tmp_path):
     # Precondition: the initial CMA has serialized state in trial attrs.
     assert old._restore_optimizer(completed) is not None
 
-    assert maybe_restart(study, project, optuna.samplers.RandomSampler())
+    assert _restart(study, project, optuna.samplers.RandomSampler())
     new = study.sampler
     assert restart_index(study) == 1
     assert study.user_attrs[RESTART_ATTR] == 1
@@ -132,9 +136,40 @@ def test_restart_swaps_in_fresh_scoped_cma(tmp_path):
     )
 
     # Budget: 2 restarts allowed, then the stall stops the run as before.
-    assert maybe_restart(study, project, optuna.samplers.RandomSampler())
+    assert _restart(study, project, optuna.samplers.RandomSampler())
     assert restart_index(study) == 2
-    assert not maybe_restart(study, project, optuna.samplers.RandomSampler())
+    assert _restart(study, project, optuna.samplers.RandomSampler()) is None
+
+
+def test_maybe_restart_returns_event_and_writes_restarts_json(tmp_path):
+    from sofaopt.core.restart_events import load_restart_events
+
+    project = _project(tmp_path)
+    project.trials_dir.mkdir(parents=True, exist_ok=True)
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=optuna.samplers.CmaEsSampler(popsize=4, n_startup_trials=2, seed=1),
+    )
+    study.optimize(_objective, n_trials=12)
+
+    event = maybe_restart(
+        study, project, optuna.samplers.RandomSampler(), gen=3, trial_chron=12
+    )
+    assert event is not None
+    assert event.restart_index == 1
+    assert event.gen == 3
+    assert event.trial_chron == 12
+    assert event.old_popsize == 4
+    assert event.new_popsize == restart_popsize(project, 1) == 8
+    # Incumbent snapshot matches the study's best completed trial.
+    assert event.incumbent_score == study.best_value
+    assert event.incumbent_params == study.best_trial.params
+
+    # The event is persisted to restarts.json (display log), deduped by index.
+    persisted = load_restart_events(project.trials_dir)
+    assert len(persisted) == 1
+    assert persisted[0]["restart_index"] == 1
+    assert persisted[0]["new_popsize"] == 8
 
 
 def test_build_study_resume_restores_restart_sampler(tmp_path):

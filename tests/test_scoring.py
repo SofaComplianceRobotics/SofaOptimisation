@@ -17,6 +17,7 @@ from sofaopt.core.scoring import (
     aggregate_repeats,
     combine_weighted,
     normalize_test_score,
+    write_progress,
 )
 from sofaopt.core.trialprep import params_from_trial
 from sofaopt.project import ParamSpec, SofaOptProject, TestSpec
@@ -260,3 +261,36 @@ def test_params_from_trial_constrain_hook_applies():
     trial = optuna.trial.FixedTrial({"a": 0.9, "flag": False})
     params = params_from_trial(trial, project)
     assert params["a"] == pytest.approx(0.2)
+
+
+# ---------------------------------------------------------------------------
+# write_progress restart_state payload
+# ---------------------------------------------------------------------------
+
+def _read_progress(cfg) -> dict:
+    import json
+
+    return json.loads(cfg.project.progress_file.read_text(encoding="utf-8"))
+
+
+def test_write_progress_includes_restart_state():
+    cfg = _cfg(cmaes_restarts=3, stall_generations=5)
+    cfg.project.trials_dir.mkdir(parents=True, exist_ok=True)
+    rs = {
+        "restart_index": 2, "restarts_max": 3, "stall_count": 4, "stall_limit": 10,
+        "current_popsize": 16, "fruitless_streak": 1, "restart_patience": 2,
+        "run_until_converged": True,
+    }
+    write_progress(cfg, 1, 0, [], restart_state=rs)
+    assert _read_progress(cfg)["restart"] == rs
+
+
+def test_write_progress_default_restart_state_when_omitted():
+    cfg = _cfg(cmaes_restarts=3, stall_generations=5)
+    cfg.project.trials_dir.mkdir(parents=True, exist_ok=True)
+    write_progress(cfg, 1, 0, [])  # no restart_state -> documented default block
+    restart = _read_progress(cfg)["restart"]
+    assert restart["restart_index"] == 0
+    assert restart["restarts_max"] == 3
+    assert restart["current_popsize"] == cfg.project.n_parallel
+    assert restart["run_until_converged"] is False
