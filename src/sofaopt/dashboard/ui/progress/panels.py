@@ -7,6 +7,97 @@ from sofaopt.dashboard.plotting.colors import C_BANNER, C_BORDER, C_FINAL
 from .builders import _build_progress_card
 
 
+def _build_run_cells(run_scores: list, run_total: int) -> list:
+    """Per-repeat score chips (only when a test has multiple repeats)."""
+    if run_total <= 1 or not run_scores:
+        return []
+    cells = []
+    for idx, rs in enumerate(run_scores):
+        if rs == float("-inf") or rs is None:
+            label, color = "FAIL", "#e03131"
+        else:
+            label, color = f"{rs:.3f}", "#2f9e44"
+        cells.append(
+            html.Span(
+                f"run {idx + 1}: {label}",
+                style={
+                    "color": color,
+                    "background": "#f1f3f5",
+                    "borderRadius": "4px",
+                    "padding": "2px 8px",
+                    "fontSize": "0.78rem",
+                    "fontWeight": 600,
+                    "marginRight": "6px",
+                },
+            )
+        )
+    return cells
+
+
+def _build_test_row(test_name: str, info: dict) -> html.Div:
+    """One test's contribution block (bar + numbers + per-run chips)."""
+    agg = float(info.get("aggregate_score", 0.0) or 0.0)
+    max_s = float(info.get("max_score", 1.0) or 1.0)
+    weight = float(info.get("weight_pct", 0.0) or 0.0)
+    norm = min(agg / max_s, 1.0) if max_s > 0 else 0.0
+    contribution = norm * weight
+    success_pct = norm * 100
+    bar_pct = min(norm * 100, 100)
+    run_cells = _build_run_cells(info.get("run_scores") or [], int(info.get("run_total", 1)))
+
+    return html.Div(
+        [
+            html.Div(
+                [
+                    html.Span(test_name, className="fw-semibold me-2"),
+                    html.Span(
+                        f"{weight:.0f}% of score",
+                        style={
+                            "background": "#e7f5ff",
+                            "color": "#1971c2",
+                            "borderRadius": "999px",
+                            "padding": "1px 10px",
+                            "fontSize": "0.78rem",
+                            "fontWeight": 600,
+                        },
+                    ),
+                ],
+                className="d-flex align-items-center mb-1",
+            ),
+            html.Div(
+                html.Div(
+                    style={
+                        "width": f"{bar_pct:.1f}%",
+                        "height": "100%",
+                        "background": C_BANNER,
+                        "borderRadius": "999px",
+                        "transition": "width 400ms ease",
+                    }
+                ),
+                style={
+                    "height": "10px",
+                    "background": "#dee2e6",
+                    "borderRadius": "999px",
+                    "overflow": "hidden",
+                    "marginBottom": "4px",
+                },
+            ),
+            html.Div(
+                [
+                    html.Span(f"{agg:.3f} / {max_s:.3f}", style={"fontWeight": 600, "marginRight": "6px"}),
+                    html.Span(f"-> {success_pct:.1f}% success rate", className="text-muted me-3"),
+                    html.Span(f"earned {contribution:.2f} / {weight:.1f} pts", style={"color": C_FINAL, "fontWeight": 600}),
+                ],
+                style={"fontSize": "0.82rem"},
+                className="mb-1",
+            ),
+            html.Div(run_cells, className="d-flex flex-wrap") if run_cells else html.Div(),
+        ],
+        className="mb-3 pb-3",
+        style={"borderBottom": f"1px solid {C_BORDER}"},
+    )
+
+
 def _build_trial_detail(state: dict, gen_name: str, trial_name: str) -> html.Div:
     """Full per-test scoring breakdown for one trial."""
     final_score = state.get("final_score", 0.0) or 0.0
@@ -24,97 +115,13 @@ def _build_trial_detail(state: dict, gen_name: str, trial_name: str) -> html.Div
         style={"fontSize": "1.05rem"},
     )
 
-    rows = []
-    for test_name, info in sorted(
-        test_scores.items(), key=lambda kv: kv[1].get("weight_pct", 0), reverse=True
-    ):
-        if not isinstance(info, dict):
-            continue
-        agg = float(info.get("aggregate_score", 0.0) or 0.0)
-        max_s = float(info.get("max_score", 1.0) or 1.0)
-        weight = float(info.get("weight_pct", 0.0) or 0.0)
-        norm = min(agg / max_s, 1.0) if max_s > 0 else 0.0
-        contribution = norm * weight
-        success_pct = norm * 100
-        run_scores: list = info.get("run_scores") or []
-        run_total = int(info.get("run_total", 1))
-        bar_pct = min(norm * 100, 100)
-
-        run_cells = []
-        if run_total > 1 and run_scores:
-            for idx, rs in enumerate(run_scores):
-                if rs == float("-inf") or rs is None:
-                    label, color = "FAIL", "#e03131"
-                else:
-                    label, color = f"{rs:.3f}", "#2f9e44"
-                run_cells.append(
-                    html.Span(
-                        f"run {idx + 1}: {label}",
-                        style={
-                            "color": color,
-                            "background": "#f1f3f5",
-                            "borderRadius": "4px",
-                            "padding": "2px 8px",
-                            "fontSize": "0.78rem",
-                            "fontWeight": 600,
-                            "marginRight": "6px",
-                        },
-                    )
-                )
-
-        rows.append(
-            html.Div(
-                [
-                    html.Div(
-                        [
-                            html.Span(test_name, className="fw-semibold me-2"),
-                            html.Span(
-                                f"{weight:.0f}% of score",
-                                style={
-                                    "background": "#e7f5ff",
-                                    "color": "#1971c2",
-                                    "borderRadius": "999px",
-                                    "padding": "1px 10px",
-                                    "fontSize": "0.78rem",
-                                    "fontWeight": 600,
-                                },
-                            ),
-                        ],
-                        className="d-flex align-items-center mb-1",
-                    ),
-                    html.Div(
-                        html.Div(
-                            style={
-                                "width": f"{bar_pct:.1f}%",
-                                "height": "100%",
-                                "background": C_BANNER,
-                                "borderRadius": "999px",
-                                "transition": "width 400ms ease",
-                            }
-                        ),
-                        style={
-                            "height": "10px",
-                            "background": "#dee2e6",
-                            "borderRadius": "999px",
-                            "overflow": "hidden",
-                            "marginBottom": "4px",
-                        },
-                    ),
-                    html.Div(
-                        [
-                            html.Span(f"{agg:.3f} / {max_s:.3f}", style={"fontWeight": 600, "marginRight": "6px"}),
-                            html.Span(f"-> {success_pct:.1f}% success rate", className="text-muted me-3"),
-                            html.Span(f"earned {contribution:.2f} / {weight:.1f} pts", style={"color": C_FINAL, "fontWeight": 600}),
-                        ],
-                        style={"fontSize": "0.82rem"},
-                        className="mb-1",
-                    ),
-                    html.Div(run_cells, className="d-flex flex-wrap") if run_cells else html.Div(),
-                ],
-                className="mb-3 pb-3",
-                style={"borderBottom": f"1px solid {C_BORDER}"},
-            )
+    rows = [
+        _build_test_row(test_name, info)
+        for test_name, info in sorted(
+            test_scores.items(), key=lambda kv: kv[1].get("weight_pct", 0), reverse=True
         )
+        if isinstance(info, dict)
+    ]
 
     return html.Div(
         [header] + rows,
@@ -165,6 +172,76 @@ def _build_progress_stats(current_records: list[dict], all_records: list[dict]) 
             )
         ],
         className="p-3 bg-light rounded",
+    )
+
+
+def _restart_stat(label: str, value: str, css: str = "text-info") -> html.Div:
+    return html.Div(
+        [html.H6(label, className="text-muted mb-1"), html.H5(value, className=css)],
+        className="col-6 col-md-3",
+    )
+
+
+def _build_restart_status(events: list[dict], progress: dict | None) -> html.Div:
+    """IPOP restart status: the latest restart's values, or — before any
+    restart — the stall-patience countdown toward the next one.
+
+    Empty (hidden) when restarts are not configured for this run, so the panel
+    only appears when it has something to say.
+    """
+    rs = (progress or {}).get("restart") or {}
+    if not events and not rs.get("restarts_max"):
+        return html.Div()  # restarts off — nothing to show
+
+    converged = rs.get("run_until_converged")
+    cells: list = []
+    if events:
+        latest = events[-1]
+        best = latest.get("incumbent_score")
+        best_str = f"{best:.2f}" if isinstance(best, (int, float)) else "—"
+        cells = [
+            _restart_stat(
+                "Restarts",
+                f"{latest.get('restart_index', 0)}"
+                + ("" if converged else f" / {rs.get('restarts_max', 0)}"),
+            ),
+            _restart_stat(
+                "Population",
+                f"{latest.get('old_popsize', 0)} → {latest.get('new_popsize', 0)}",
+            ),
+            _restart_stat("Best at restart", best_str, css="text-warning"),
+        ]
+    else:
+        cells = [
+            _restart_stat("Restarts", f"0 / {rs.get('restarts_max', 0)}"),
+            _restart_stat("Population", str(rs.get("current_popsize", "—"))),
+        ]
+
+    # Patience countdown (both phases): generations since last improvement.
+    stall_limit = rs.get("stall_limit", 0)
+    if stall_limit:
+        cells.append(
+            _restart_stat(
+                "Since improvement",
+                f"{rs.get('stall_count', 0)} / {stall_limit} gens",
+            )
+        )
+    if converged:
+        cells.append(
+            _restart_stat(
+                "Fruitless restarts",
+                f"{rs.get('fruitless_streak', 0)} / {rs.get('restart_patience', 0)}",
+                css="text-danger",
+            )
+        )
+
+    title = "IPOP restarts" + (" · run until converged" if converged else "")
+    return html.Div(
+        [
+            html.Div(title, className="text-muted small mb-2 fw-semibold"),
+            html.Div(cells, className="row g-3"),
+        ],
+        className="p-3 bg-light rounded mb-3",
     )
 
 

@@ -22,6 +22,7 @@ def build_progress_tab() -> html.Div:
                 style={"position": "sticky", "top": "0", "zIndex": 20, "background": "#ffffff", "padding": "8px 0"},
             ),
             dcc.Store(id="jump-auto-enabled", data=False),
+            html.Div(id="restart-status", className="mb-3"),
             html.Div(id="progress-stats", className="mb-3"),
             html.Div(id="progress-grid"),
             dcc.Store(id="jump-running-target-store"),

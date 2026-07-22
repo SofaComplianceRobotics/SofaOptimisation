@@ -262,7 +262,9 @@ The essentials:
 
 - **The budget** is `n_parallel × n_generations` trials, times
   `Σ run_count` SOFA launches per trial — size `n_generations` to the time you
-  actually have.
+  actually have. Don't want to guess it? `run_until_converged=True` makes
+  `n_generations` a safety ceiling and lets the search self-size via IPOP
+  restarts (optimization guide §5).
 - **CMA-ES starts at your `ParamSpec` defaults** (`x0`), so set them to your
   best-known design. Frozen params (`min == max`) are excluded from the search.
 - `n_parallel` must be **≥ 4** for CMA-ES (enforced).

@@ -93,20 +93,36 @@ def _build_sampler_controls() -> html.Div:
                         className="col-12 col-md-3",
                     ),
                     html.Div(
-                        dcc.Checklist(
-                            id="opt-cmaes-margin",
-                            options=[{"label": " CMA-ES with Margin", "value": "margin"}],
-                            value=["margin"] if project.cmaes_with_margin else [],
-                            className="mt-4",
-                        ),
-                        className="col-12 col-md-2",
+                        [
+                            dcc.Checklist(
+                                id="opt-cmaes-margin",
+                                options=[{"label": " CMA-ES with Margin", "value": "margin"}],
+                                value=["margin"] if project.cmaes_with_margin else [],
+                                className="mt-4",
+                            ),
+                            dcc.Checklist(
+                                id="opt-run-until-converged",
+                                options=[{"label": " Run until converged", "value": "converged"}],
+                                value=["converged"] if project.run_until_converged else [],
+                                className="mt-1",
+                            ),
+                            dcc.Input(
+                                id="opt-restart-patience", type="number", min=1, step=1,
+                                value=project.restart_patience,
+                                className="form-control form-control-sm mt-1",
+                                style={"width": "80px"},
+                                placeholder="patience",
+                            ),
+                        ],
+                        className="col-12 col-md-3",
                     ),
                 ],
                 className="row g-2 align-items-start",
             ),
             html.Small(
                 "GP-BO is most sample-efficient with a small batch — try Parallel ≈ 4. "
-                "Margin only applies to CMA-ES and fixes low-cardinality integer stagnation.",
+                "Margin only applies to CMA-ES. ‘Run until converged’ ignores Gens as a "
+                "target and stops once restarts stop improving (needs CMA-ES + restarts).",
                 className="text-muted",
             ),
         ],

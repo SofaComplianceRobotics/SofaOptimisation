@@ -92,6 +92,40 @@ def write_gen_summary(gen_dir: Path, gen_index: int, scores: list[float]) -> Non
     )
 
 
+def _default_restart_state(project) -> dict:
+    """The ``restart`` payload block when the orchestrator passes none (e.g. the
+    single write before the loop, or any non-restart caller)."""
+    return {
+        "restart_index": 0,
+        "restarts_max": project.cmaes_restarts,
+        "stall_count": 0,
+        "stall_limit": 0,
+        "current_popsize": project.n_parallel,
+        "fruitless_streak": 0,
+        "restart_patience": 0,
+        "run_until_converged": False,
+    }
+
+
+def _progress_position(
+    project, restart: dict, gen_total: int, total_done: float, total: float
+) -> tuple[float | None, int | None, str | None]:
+    """(pct, gen_total, restart_progress) for the progress payload.
+
+    A ``run_until_converged`` run self-sizes, so the generation-fraction
+    percentage and total are meaningless — report ``None`` for both and a
+    descriptive restart position instead (honest and non-monotonic: it resets
+    when a restart pays off).
+    """
+    if project.run_until_converged and restart.get("restarts_max"):
+        idx = restart.get("restart_index", 0)
+        fruitless = restart.get("fruitless_streak", 0)
+        patience = restart.get("restart_patience", 0)
+        return None, None, f"restart {idx}, {fruitless}/{patience} fruitless"
+    pct = round(100 * total_done / total, 1) if total else 0.0
+    return pct, gen_total, None
+
+
 def write_progress(
     cfg: RunConfig,
     gen_index: int,
@@ -99,11 +133,14 @@ def write_progress(
     all_scores: list[float],
     started_at: float = 0.0,
     total_gens: int | None = None,
+    restart_state: dict | None = None,
 ) -> None:
     """Write progress.json for the dashboard to poll.
 
     ``total_gens`` is the absolute last generation of this run (offset +
     n_generations when resuming); without it a resumed run would report > 100%.
+    ``restart_state`` is the per-generation IPOP snapshot (index, popsize,
+    stall/patience counters) the dashboard's restart panel reads.
     """
     project = cfg.project
     n_parallel = project.n_parallel
@@ -114,9 +151,14 @@ def write_progress(
     total = n_generations * n_parallel
     valid_scores = [s for s in all_scores if s not in (float("-inf"), None)]
 
+    restart = restart_state or _default_restart_state(project)
+    pct, gen_total, restart_progress = _progress_position(
+        project, restart, n_generations, total_done, total
+    )
+
     payload = {
         "gen_current": gen_index,
-        "gen_total": n_generations,
+        "gen_total": gen_total,
         "trials_per_gen": n_parallel,
         "runs_per_trial": cfg.n_repeats,
         "test_names": list(cfg.selected_names),
@@ -135,13 +177,15 @@ def write_progress(
         "tests_per_trial": len(cfg.selected_names),
         "trial_current": total_done,
         "trial_total": total,
-        "pct": round(100 * total_done / total, 1) if total else 0.0,
+        "pct": pct,
+        "restart_progress": restart_progress,
         "best_score": round(max(valid_scores), 4) if valid_scores else None,
         "avg_score": (
             round(sum(valid_scores) / len(valid_scores), 4) if valid_scores else None
         ),
         "started_at": started_at,
         "updated_at": time.time(),
+        "restart": restart,
     }
 
     # Atomic: the dashboard polls this file while the run writes it.

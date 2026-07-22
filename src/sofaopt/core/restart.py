@@ -24,10 +24,14 @@ sofaopt generations (``n_parallel`` asks each); Optuna handles that natively.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import random
+import time
 
 import optuna
+
+from sofaopt.core.restart_events import RestartEvent, record_restart_event
 
 logger = logging.getLogger(__name__)
 
@@ -95,34 +99,68 @@ def build_restart_sampler(
     )
 
 
+def _build_restart_event(
+    study: optuna.Study, project, index: int, new_index: int, *, gen: int, trial_chron: int
+) -> RestartEvent:
+    """Snapshot the restart for the display log (see ``restart_events.py``)."""
+    incumbent_score: float | None = None
+    incumbent_params: dict = {}
+    with contextlib.suppress(ValueError):  # no completed trial yet -> no incumbent
+        incumbent_score = float(study.best_value)
+        incumbent_params = dict(study.best_trial.params)
+    return RestartEvent(
+        restart_index=new_index,
+        gen=gen,
+        trial_chron=trial_chron,
+        old_popsize=restart_popsize(project, index),
+        new_popsize=restart_popsize(project, new_index),
+        sigma0=project.cmaes_sigma0,
+        incumbent_score=incumbent_score,
+        incumbent_params=incumbent_params,
+        timestamp=time.time(),
+    )
+
+
 def maybe_restart(
     study: optuna.Study,
     project,
     independent_sampler: optuna.samplers.BaseSampler,
-) -> bool:
-    """On a stall: swap in the next IPOP restart. False when restarts are
-    off, don't apply (non-CMA-ES sampler, multi-objective), or the restart
-    budget is spent — the caller then stops the run as before."""
+    *,
+    gen: int,
+    trial_chron: int,
+) -> RestartEvent | None:
+    """On a stall: swap in the next IPOP restart and return its event.
+
+    ``None`` (falsy, so ``if maybe_restart(...):`` still reads naturally) when
+    restarts are off, don't apply (non-CMA-ES sampler, multi-objective), or the
+    restart budget is spent — the caller then stops the run as before. On a
+    real restart the returned :class:`RestartEvent` is also appended to the
+    ``restarts.json`` display log. ``gen``/``trial_chron`` come from the caller
+    (the orchestrator) since only it knows the run position.
+    """
     if (
         project.cmaes_restarts <= 0
         or project.sampler != "cmaes"
         or project.multi_objective
     ):
-        return False
+        return None
     index = restart_index(study)
     if index >= project.cmaes_restarts:
         logger.info(
             f"[restart] Restart budget spent ({index}/{project.cmaes_restarts})."
         )
-        return False
+        return None
 
     new_index = index + 1
     study.set_user_attr(RESTART_ATTR, new_index)
     study.sampler = build_restart_sampler(project, new_index, independent_sampler)
+    event = _build_restart_event(
+        study, project, index, new_index, gen=gen, trial_chron=trial_chron
+    )
+    record_restart_event(project.trials_dir, event)
     logger.info(
         f"[restart] IPOP restart {new_index}/{project.cmaes_restarts}: "
-        f"popsize {restart_popsize(project, index)} -> "
-        f"{restart_popsize(project, new_index)}, sigma0 {project.cmaes_sigma0}, "
-        f"uniform-random x0."
+        f"popsize {event.old_popsize} -> {event.new_popsize}, "
+        f"sigma0 {project.cmaes_sigma0}, uniform-random x0."
     )
-    return True
+    return event

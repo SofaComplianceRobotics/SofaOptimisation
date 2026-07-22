@@ -315,14 +315,49 @@ first N stalls each swap in a **fresh** CMA-ES with
 The run-global best is never forgotten — the study keeps every trial, and a
 restart must beat the incumbent within `stall_generations` generations or
 the next stall fires (restarting again, or stopping once the budget of N is
-spent). `n_generations` still caps the total run. Requires
-`stall_generations > 0` and `sampler="cmaes"`; single-objective only.
-Resuming a paused run continues from the latest restart's state.
+spent). By default `n_generations` still caps the total run; set
+`run_until_converged` (below) to let convergence, not a generation count,
+decide when to stop. Requires `stall_generations > 0` and `sampler="cmaes"`;
+single-objective only. Resuming a paused run continues from the latest
+restart's state.
 
 Note: Optuna deprecated its own `restart_strategy` in v4.4, so sofaopt
 implements the restart at the orchestrator level (`core/restart.py`) — the
 growing population means one internal CMA update spans several sofaopt
 generations, which is expected.
+
+The restart is **visible on the dashboard**: a dotted marker on the Performance
+convergence curve at each restart (so you can see whether it helped), and a
+live restart-status panel on the Progress tab showing the current
+restart / population / best-at-restart and the stall-patience countdown to the
+next one.
+
+### `run_until_converged` — stop guessing the generation budget
+
+A fixed `n_generations` forces you to guess how long convergence takes; too low
+truncates the search, too high burns budget after it has converged.
+`run_until_converged=True` removes the guess: the run keeps restarting into new
+basins and **stops once `restart_patience` consecutive restarts fail to improve
+the best score** — the point where restarts have stopped finding anything new.
+
+- `n_generations` becomes a **safety ceiling**, not a target — set it
+  generously; it only fires if something is misconfigured.
+- `restart_patience` (default 2) is patience measured *in restarts*: give up
+  after this many fruitless basins in a row. A restart that improves the
+  incumbent resets the streak, so a run that keeps finding better basins keeps
+  going. It parallels `stall_generations` (patience in generations before a
+  restart) one level up.
+- `cmaes_restarts` stays the **hard cap** on total restarts (a safety bound);
+  set it generously too. The run ends on the fruitless streak, the restart cap,
+  or the ceiling — whichever comes first.
+- Requires `cmaes_restarts > 0`, `stall_generations > 0`, `restart_patience >=
+  1`, `sampler="cmaes"`, single-objective.
+
+This is the self-sizing recipe for a multimodal landscape: set
+`stall_generations` to the patience per basin, `restart_patience` to how many
+dead-end restarts you'll tolerate, and let the search decide its own length.
+The dashboard's restart panel shows the fruitless-restart count toward
+`restart_patience` so you can watch it approach convergence.
 
 ## 6. How scores combine — and one objective vs many
 

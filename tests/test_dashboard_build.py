@@ -37,7 +37,10 @@ def test_create_app_builds():
     assert app is not None
     # The new tab and sampler controls must be present in the layout.
     layout_str = str(app.layout)
-    for needle in ("Importance / Interactions", "opt-sampler", "opt-cmaes-margin", "opt-seed-sampler"):
+    for needle in (
+        "Importance / Interactions", "opt-sampler", "opt-cmaes-margin",
+        "opt-seed-sampler", "opt-run-until-converged", "opt-restart-patience",
+    ):
         assert needle in layout_str, f"missing dashboard element: {needle}"
 
 
