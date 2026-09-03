@@ -52,6 +52,8 @@ def load_trial_records(trials_dir: Path) -> list[dict]:
                 continue
 
             record = _record_from_state(trial_state, gen_dir.name, trial_dir.name)
+            if not record["params"]:
+                record["params"] = _load_params_fallback(trial_dir)
             record["gen_index"] = gen_index
             record["trial_index"] = trial_index
             record["chron"] = chron
@@ -100,6 +102,22 @@ def load_gen_summaries(trials_dir: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+
+def _load_params_fallback(trial_dir: Path) -> dict:
+    """Some projects only write full params to params.json, never into
+    trial_state.json's own (optional) params field -- FoamBotHex does this
+    for its geometry params. Fall back to the sibling file so every generic
+    consumer of this loader (dashboard leaderboard, search-space report,
+    etc.) sees the real values instead of an empty dict."""
+    params_path = trial_dir / "params.json"
+    if not params_path.exists():
+        return {}
+    try:
+        data = json.loads(params_path.read_text(encoding="utf-8"))
+    except Exception:  # mid-write/partial JSON is expected during a live run
+        return {}
+    return data if isinstance(data, dict) else {}
 
 def _record_from_state(trial_state: dict, gen_name: str, trial_name: str) -> dict:
     trial_level_state = str(trial_state.get("state", "")).lower()

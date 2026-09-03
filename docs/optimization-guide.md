@@ -332,6 +332,28 @@ live restart-status panel on the Progress tab showing the current
 restart / population / best-at-restart and the stall-patience countdown to the
 next one.
 
+#### Configure restarts the way that actually helps
+
+A benchmark study (`examples/landscape`) found the **default stall trigger makes
+restarts net-negative**: the best-plateau heuristic fires while CMA-ES is still
+productive, discarding a converging run to jump to a random (usually worse)
+point. Two fields fix this; enable them whenever you set `cmaes_restarts>0`:
+
+- **`restart_on_convergence=True`** — trigger restarts on CMA-ES's *actual*
+  convergence (its internal step-size collapse) instead of the
+  `stall_generations` plateau. A restart then never interrupts a working search:
+  at tight budgets nothing has converged with budget to spare, so **no restart
+  fires (do no harm)**; at large budgets restarts fire and help. With this set,
+  `stall_generations` is no longer required.
+- **`warm_restarts=True`** — re-seed each restart from the current incumbent with
+  an inflated spread, instead of a uniform-random jump. Measured to match or beat
+  cold random restarts across the benchmark, most on deceptive landscapes.
+
+**When restarts pay off:** only on a **multimodal** landscape with a **large
+budget** (thousands of evaluations — enough that a single CMA-ES run converges
+with budget to spare). On tight budgets (a few hundred evals) they are correctly
+inert. See `examples/landscape/README.md` for the measured tables.
+
 ### `run_until_converged` — stop guessing the generation budget
 
 A fixed `n_generations` forces you to guess how long convergence takes; too low

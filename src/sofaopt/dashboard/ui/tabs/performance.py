@@ -12,8 +12,35 @@ def build_performance_tab() -> html.Div:
             dcc.Store(id="selected-trial-store", data={}),
 
             html.H3("Performance", className="mb-3"),
-            dcc.Graph(id="performance-graph", style={"height": "600px"}),
+            html.Div(id="optimization-health-panel", className="mb-3"),
+            dcc.Graph(
+                id="performance-graph",
+                style={"height": "600px"},
+                config={"scrollZoom": True, "displaylogo": False},
+            ),
             html.Div(id="trial-detail-panel", className="my-3"),
+
+            # Search-space convergence report — user-triggered (heavy: walks
+            # every trial), not on the polling interval like the graphs above.
+            html.Div(
+                [
+                    html.Hr(className="my-2"),
+                    html.Div(
+                        [
+                            html.Span("Search-space report", className="fw-semibold small text-muted me-3"),
+                            html.Button(
+                                "Generate report",
+                                id="search-space-report-btn",
+                                n_clicks=0,
+                                className="btn btn-sm btn-outline-primary",
+                            ),
+                        ],
+                        className="d-flex align-items-center flex-wrap gap-2",
+                    ),
+                    html.Div(id="search-space-report-panel", className="mt-3"),
+                ],
+                className="px-1 mb-3",
+            ),
 
             # Video panel — shown once a trial is selected
             html.Div(

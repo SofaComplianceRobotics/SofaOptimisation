@@ -94,6 +94,31 @@ class Trial:
     def write_status(self, payload: dict, *, min_interval: float = 0.0) -> None:
         self._ensure_writer().write_status(payload, min_interval=min_interval)
 
+    def report_progress(
+        self,
+        score: float,
+        frame: int,
+        total: int | None = None,
+        *,
+        min_interval: float = 0.2,
+    ) -> None:
+        """Live progress plus the anytime ``partial_score`` in one call.
+
+        ``score`` is the score this run would receive if it ended now (same
+        scale as :meth:`write_score`) — the signal multi-fidelity step pruning
+        ranks candidates by (``TestSpec.prunable``). Observation only: call it
+        from the animation loop at a modest cadence; it must never feed back
+        into the physics.
+        """
+        payload: dict[str, Any] = {
+            "state": "running",
+            "partial_score": round(float(score), 4),
+            "current_frame": int(frame),
+        }
+        if total is not None:
+            payload["total_frames"] = int(total)
+        self.write_status(payload, min_interval=min_interval)
+
     def write_score(self, score: float, reason: str = "") -> None:
         """Record this run's final score and stop the simulation."""
         self._ensure_writer().write_score_and_stop(score, reason)

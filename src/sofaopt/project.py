@@ -130,6 +130,21 @@ class TestSpec:
             ``score_aggregation="mean"`` (repeats must be noise samples of
             one scenario, not different scenarios). Ignored for
             multi-objective runs (no scalar incumbent to race against).
+        prunable: Multi-fidelity step pruning opt-in. Declares that this
+            test's scenes report an anytime ``partial_score`` (the score the
+            run would receive if it ended now) in their ``write_status``
+            payload — e.g. via :meth:`sofaopt.scene.Trial.report_progress`.
+            Only prunable tests may be step-pruned; see the project's
+            ``prune_mode`` and ``docs/design/multi-fidelity.md``.
+        prune_rungs: The pruning schedule: ``((step, keep_fraction), ...)``,
+            ascending steps. At each rung, once every non-terminal run in the
+            generation has reached ``step`` (or finished), candidates are
+            ranked by anytime score and only the top ``ceil(population *
+            keep_fraction)`` keep running; the rest are killed (or flagged,
+            in shadow mode). Calibrate the steps from a trace-replay study
+            (``examples/prefix_pruning_study/``) — settle-gated scenes make
+            guessed rungs either dead or dangerous. Keep the last fraction
+            >= 0.5 for CMA-ES (the top mu must be fully evaluated).
         default_selected: Whether the dashboard pre-selects this test.
     """
 
@@ -145,6 +160,8 @@ class TestSpec:
     relaunchable: bool = False
     score_aggregation: str = "mean"
     run_count_min: int | None = None
+    prunable: bool = False
+    prune_rungs: tuple[tuple[int, float], ...] = ()
     default_selected: bool = True
 
     def __post_init__(self) -> None:
@@ -165,6 +182,38 @@ class TestSpec:
                     f"Test '{self.name}': run_count_min must be in "
                     f"[1, run_count={self.run_count}], got {self.run_count_min}."
                 )
+        # prune_rungs may come back from JSON round-trips as nested lists.
+        object.__setattr__(
+            self, "prune_rungs",
+            tuple((int(s), float(f)) for s, f in self.prune_rungs),
+        )
+        self._validate_pruning_contract()
+
+    def _validate_pruning_contract(self) -> None:
+        """Step-pruning opt-in rules (v1 scope; see docs/design/multi-fidelity.md)."""
+        if self.prune_rungs and not self.prunable:
+            raise ValueError(
+                f"Test '{self.name}': prune_rungs set but prunable=False — "
+                "declare prunable=True (the scene must report partial_score)."
+            )
+        if not self.prunable:
+            return
+        for flag, why in (
+            (self.run_count != 1, "run_count == 1 (repeats need a partial aggregate)"),
+            (self.gated, "an ungated test (gated runs launch mid-generation)"),
+            (self.relaunchable, "a non-relaunchable test (probe frames reset per launch)"),
+        ):
+            if flag:
+                raise ValueError(f"Test '{self.name}': prunable requires {why}.")
+        steps = [s for s, _ in self.prune_rungs]
+        fractions = [f for _, f in self.prune_rungs]
+        if steps != sorted(steps) or len(set(steps)) != len(steps) or any(s <= 0 for s in steps):
+            raise ValueError(f"Test '{self.name}': prune_rungs steps must be positive and ascending.")
+        if any(not 0.0 < f < 1.0 for f in fractions) or fractions != sorted(fractions, reverse=True):
+            raise ValueError(
+                f"Test '{self.name}': prune_rungs keep fractions must be in (0, 1) "
+                "and non-increasing."
+            )
 
     @property
     def display_label(self) -> str:
@@ -302,6 +351,24 @@ class SofaOptProject:
     """Population-size multiplier applied at each IPOP restart (default 2).
     The internal CMA population grows past ``n_parallel``, so one CMA update
     then spans several sofaopt generations — that is expected and fine."""
+    restart_on_convergence: bool = False
+    """Trigger restarts (and ``run_until_converged``) on CMA-ES's *actual*
+    convergence instead of the ``stall_generations`` best-plateau. The plateau
+    heuristic fires while the search is still productive and makes restarts
+    net-harmful; the convergence signal (the internal optimizer's
+    ``should_stop``) only fires once CMA-ES has genuinely converged, so a
+    restart never interrupts a working search. **Recommended whenever
+    ``cmaes_restarts > 0``** — measured to turn restarts from net-negative into
+    do-no-harm-at-tight-budget / helpful-at-large-budget (see
+    ``examples/landscape``). Only applies to ``sampler="cmaes"``; with it set,
+    ``stall_generations`` is no longer required to be > 0."""
+    warm_restarts: bool = False
+    """Re-seed each restart from the current incumbent (best-so-far) with an
+    inflated spread, instead of a uniform-random point. Re-explores the
+    promising region rather than jumping somewhere usually-worse — measured to
+    match or beat cold random restarts across the benchmark, most on deceptive
+    landscapes. Only applies when ``sampler="cmaes"`` and ``cmaes_restarts >
+    0``."""
     run_until_converged: bool = False
     """Self-size the run: ``n_generations`` becomes a safety ceiling, not a
     target. The run keeps restarting on each stall and stops once
@@ -319,6 +386,19 @@ class SofaOptProject:
     incumbent resets the streak. Parallels ``stall_generations`` (patience in
     generations before a restart) one level up: patience in restarts before
     giving up."""
+    prune_mode: Literal["off", "shadow", "kill"] = "off"
+    """Multi-fidelity step pruning (successive halving on the simulation-step
+    prefix; ``docs/design/multi-fidelity.md``). At each rung of the prunable
+    test's ``prune_rungs``, the generation's candidates are ranked by their
+    anytime ``partial_score`` and the bottom are stopped early. ``"off"``
+    (default) does nothing. ``"shadow"`` runs the full decision path but only
+    LOGS would-kill decisions (and marks the run slot) — the risk-free
+    pre-flight; always shadow a project before killing. ``"kill"`` terminates
+    the losers' SOFA processes; they are told to Optuna as PRUNED with their
+    partial score as an intermediate value (which
+    ``CmaEsSampler(consider_pruned_trials=True)`` feeds back into the update).
+    v1 scope: single-objective, exactly one test, and that test ``prunable``
+    with calibrated ``prune_rungs``."""
     hard_fail_score: float = -3.0
     max_active_sofa_procs: int = 12
     max_run_relaunches: int = 0
@@ -381,6 +461,7 @@ class SofaOptProject:
         self._validate_search_space()
         self._validate_restart_config()
         self._validate_multi_objective()
+        self._validate_pruning()
 
     def _validate_search_space(self) -> None:
         if self.sampler == "cmaes" and not self.multi_objective and self.n_parallel < 4:
@@ -396,23 +477,54 @@ class SofaOptProject:
             raise ValueError("cmaes_restarts must be >= 0.")
         if self.cmaes_inc_popsize < 1:
             raise ValueError("cmaes_inc_popsize must be >= 1.")
-        if self.cmaes_restarts > 0 and self.stall_generations <= 0:
+        # A restart needs SOME trigger: the stall plateau, or convergence.
+        has_trigger = self.stall_generations > 0 or self.restart_on_convergence
+        if self.cmaes_restarts > 0 and not has_trigger:
             raise ValueError(
-                "cmaes_restarts > 0 needs stall_generations > 0 — the stall "
-                "tracker is what triggers a restart."
+                "cmaes_restarts > 0 needs a restart trigger — set "
+                "stall_generations > 0 or restart_on_convergence=True."
             )
+        if self.warm_restarts and self.cmaes_restarts <= 0:
+            raise ValueError("warm_restarts=True needs cmaes_restarts > 0.")
         if self.run_until_converged and (
             self.cmaes_restarts <= 0
-            or self.stall_generations <= 0
+            or not has_trigger
             or self.restart_patience < 1
             or self.sampler != "cmaes"
             or self.multi_objective
         ):
             raise ValueError(
-                "run_until_converged=True needs cmaes_restarts > 0, "
-                "stall_generations > 0, restart_patience >= 1, sampler='cmaes' "
-                "and single-objective — it makes the restart-budget stall signal "
-                "the sole termination condition."
+                "run_until_converged=True needs cmaes_restarts > 0, a restart "
+                "trigger (stall_generations > 0 or restart_on_convergence=True), "
+                "restart_patience >= 1, sampler='cmaes' and single-objective."
+            )
+
+    def _validate_pruning(self) -> None:
+        """Step-pruning run rules (v1 scope; docs/design/multi-fidelity.md §4)."""
+        if self.prune_mode == "off":
+            return
+        if self.multi_objective:
+            raise ValueError("prune_mode requires a single-objective study.")
+        if len(self.tests) != 1 or not self.tests[0].prunable or not self.tests[0].prune_rungs:
+            raise ValueError(
+                "prune_mode (v1) requires exactly one test, marked prunable "
+                "with calibrated prune_rungs — multi-test trials need a "
+                "partial-score aggregate that is not built yet."
+            )
+        import warnings
+
+        if self.prune_mode == "kill" and self.n_parallel < 8:
+            warnings.warn(
+                f"prune_mode='kill' with n_parallel={self.n_parallel}: killing the "
+                "bottom of a population this small rides a noisy partial signal — "
+                "the measured calibrations used n_parallel >= 8.",
+                stacklevel=2,
+            )
+        if self.tests[0].prune_rungs[-1][1] < 0.5:
+            warnings.warn(
+                "prune_rungs keeps fewer than half the population; with CMA-ES the "
+                "top mu (half) should be fully evaluated — see design §5.",
+                stacklevel=2,
             )
 
     def _validate_multi_objective(self) -> None:
@@ -464,6 +576,15 @@ class SofaOptProject:
     @property
     def db_path(self) -> Path:
         return self.runtime_dir / "study.db"
+
+    @property
+    def logs_dir(self) -> Path:
+        """Run/session logs, deliberately a sibling of ``runtime`` — never
+        inside it. Archiving *moves* ``runtime`` with ``os.rename``, which fails
+        on Windows while any file inside is open; a handler tailing a log under
+        ``runtime`` would block that move. Keeping logs here also means a run's
+        console log is a session artifact, not archived run data."""
+        return self.work_dir / "logs"
 
     # --- convenience views -------------------------------------------------
     def test(self, name: str) -> TestSpec:

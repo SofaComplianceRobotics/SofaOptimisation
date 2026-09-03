@@ -27,6 +27,7 @@ The same :func:`analyze` result also feeds the dashboard's
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import json
 from dataclasses import dataclass
@@ -291,28 +292,49 @@ def interaction_matrix(
 # Top-level convenience
 # ---------------------------------------------------------------------------
 
+def _dispose_study_storage(study: optuna.Study) -> None:
+    """Release the SQLite file handle behind a study we opened from a path.
+
+    An RDBStorage keeps a SQLAlchemy connection pool alive; on Windows an open
+    pooled connection locks study.db, so a later ``shutil.move`` of runtime/
+    (archiving from the dashboard) fails with WinError 32. Disposing the engine
+    after we've read everything we need frees the handle. Best-effort — never
+    let cleanup raise over a computed report."""
+    with contextlib.suppress(Exception):
+        storage = study._storage
+        backend = getattr(storage, "_backend", storage)  # unwrap _CachedStorage
+        engine = getattr(backend, "engine", None)
+        if engine is not None:
+            engine.dispose()
+
+
 def analyze(
     study_or_path: optuna.Study | str | Path,
     method: str = "auto",
     study_name: str | None = None,
 ) -> InteractionReport:
-    """Compute main effects + the interaction map for a study (or ``study.db``)."""
-    study = (
-        study_or_path
-        if isinstance(study_or_path, optuna.Study)
-        else load_study(study_or_path, study_name)
-    )
-    names, matrix, used = interaction_matrix(study, method=method)
-    n_done = len([
-        t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
-    ])
-    return InteractionReport(
-        param_names=names,
-        main_effects=main_effects(study),
-        interaction_matrix=matrix.tolist(),
-        interaction_method=used,
-        n_trials=n_done,
-    )
+    """Compute main effects + the interaction map for a study (or ``study.db``).
+
+    When given a path we own the storage and dispose it before returning, so
+    the dashboard never leaves study.db locked against archiving.
+    """
+    owns_storage = not isinstance(study_or_path, optuna.Study)
+    study = load_study(study_or_path, study_name) if owns_storage else study_or_path
+    try:
+        names, matrix, used = interaction_matrix(study, method=method)
+        n_done = len([
+            t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
+        ])
+        return InteractionReport(
+            param_names=names,
+            main_effects=main_effects(study),
+            interaction_matrix=matrix.tolist(),
+            interaction_method=used,
+            n_trials=n_done,
+        )
+    finally:
+        if owns_storage:
+            _dispose_study_storage(study)
 
 
 def save_report(report: InteractionReport, out_dir: str | Path) -> Path:

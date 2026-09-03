@@ -14,8 +14,11 @@ Comparison data derives ONLY from each archive's recorded scores
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import json
 import logging
+import os
 import re
 import shutil
 import time
@@ -28,6 +31,32 @@ from sofaopt.project import SofaOptProject, project_to_jsonable
 logger = logging.getLogger(__name__)
 
 MANIFEST_NAME = "archive.json"
+
+# Dropped into runtime/ by restore_archive so a later archive_run can default
+# to the run's original name/notes instead of silently losing them (a live run
+# carries no manifest, so the identity would otherwise die on restore).
+RESTORE_MARKER_NAME = ".restored_from.json"
+
+
+def _read_restore_marker(project: SofaOptProject) -> dict:
+    """The restored run's remembered identity ({} when it isn't a restore)."""
+    try:
+        return json.loads(
+            (project.runtime_dir / RESTORE_MARKER_NAME).read_text(encoding="utf-8")
+        )
+    except Exception:
+        return {}
+
+
+def _write_restore_marker(project: SofaOptProject, info: ArchiveInfo) -> None:
+    """Remember a restored run's name/notes for its next archive_run."""
+    if not (info.name or info.notes):
+        return
+    with contextlib.suppress(Exception):  # cosmetic: never fail a restore over this
+        (project.runtime_dir / RESTORE_MARKER_NAME).write_text(
+            json.dumps({"name": info.name, "notes": info.notes}, indent=2),
+            encoding="utf-8",
+        )
 
 
 @dataclass(frozen=True)
@@ -46,6 +75,7 @@ class ArchiveInfo:
     best_score: float | None
     best_params: dict
     project_snapshot: dict
+    summary_stats: dict
 
     @property
     def trials_dir(self) -> Path:
@@ -73,11 +103,20 @@ def archive_run(
 ) -> Path:
     """Move the current ``runtime/`` into a named archive and write its manifest.
 
+    ``name``/``notes`` default to the run's remembered identity when it came
+    from :func:`restore_archive` — so restore → re-archive keeps its name and
+    notes instead of silently reverting to a bare timestamp. An explicit
+    argument always wins.
+
     Returns the archive directory. Raises ``FileNotFoundError`` when there is
     no run data to archive.
     """
     if not runtime_has_run_data(project):
         raise FileNotFoundError(f"No run data to archive in {project.runtime_dir}")
+
+    remembered = _read_restore_marker(project)
+    name = name or remembered.get("name", "")
+    notes = notes or remembered.get("notes", "")
 
     stamp = time.strftime("%Y%m%d_%H%M%S")
     slug = f"{stamp}_{_slugify(name)}" if _slugify(name) else stamp
@@ -89,12 +128,53 @@ def archive_run(
     # Summarize BEFORE the move so a failed summary can't lose data mid-way.
     manifest = _build_manifest(project, name=name or slug, notes=notes)
 
-    shutil.move(str(project.runtime_dir), str(dest))
+    _move_with_retry(project.runtime_dir, dest)
+    # The marker is runtime-only bookkeeping; its identity now lives in the
+    # manifest, so it must not linger inside the archive.
+    (dest / RESTORE_MARKER_NAME).unlink(missing_ok=True)
     (dest / MANIFEST_NAME).write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
     logger.info(f"[archive] Run archived -> {dest}")
     return dest
+
+
+def _move_with_retry(src: Path, dest: Path, attempts: int = 5, delay_s: float = 0.4) -> None:
+    """Move ``runtime/`` into the archive **atomically** — all or nothing.
+
+    Deliberately ``os.rename``, never ``shutil.move``: shutil.move falls back
+    to copy-then-delete when rename fails, and on Windows a directory rename
+    fails while any file inside is open (SQLite holds study.db without
+    share-delete). That fallback copied the whole run, then raised mid-delete
+    on the locked study.db — stranding a half-moved run: trials in an orphan
+    dir with no manifest (archive_run never reached the manifest write) and
+    study.db left behind in runtime/. Observed for real on 2026-07-16; the run
+    was recoverable but invisible in the Archives tab.
+
+    os.rename moves the entire tree or nothing, so a lock now means a clean,
+    actionable failure with the run untouched. A short retry covers a handle
+    still being released (see ``analysis._dispose_study_storage``).
+    """
+    for i in range(attempts):
+        try:
+            os.rename(src, dest)
+            return
+        except OSError as exc:
+            if getattr(exc, "errno", None) == errno.EXDEV:
+                # Archives genuinely on another filesystem — rename cannot work
+                # there and copy-then-delete is the only option. Not our layout
+                # (archives/ sits beside runtime/ under work_dir).
+                shutil.move(str(src), str(dest))
+                return
+            if i == attempts - 1:
+                raise RuntimeError(
+                    f"Could not archive {src.name}: a file inside is still open "
+                    f"(usually study.db — a running optimizer, or the dashboard's "
+                    f"interaction analysis). NOTHING was moved; the run is intact. "
+                    f"Stop the holder and retry. Original error: {exc}"
+                ) from exc
+            logger.info(f"[archive] move blocked (attempt {i + 1}/{attempts}): {exc}; retrying")
+            time.sleep(delay_s)
 
 
 def _build_manifest(project: SofaOptProject, *, name: str, notes: str) -> dict:
@@ -113,6 +193,10 @@ def _build_manifest(project: SofaOptProject, *, name: str, notes: str) -> dict:
         "best_score": best["final_score"] if best else None,
         "best_params": (best or {}).get("params", {}),
         "project_snapshot": project_to_jsonable(project),
+        # Compact convergence/diversity summary, computed once here so the
+        # Archives comparison can rank runs on more than best score without
+        # re-walking every archive's full trial tree on each view.
+        "summary_stats": run_summary_stats(project.trials_dir, records=records),
     }
 
 
@@ -136,6 +220,7 @@ def load_archive_info(path: Path) -> ArchiveInfo:
         best_score=data.get("best_score"),
         best_params=dict(data.get("best_params", {})),
         project_snapshot=dict(data.get("project_snapshot", {})),
+        summary_stats=dict(data.get("summary_stats", {})),
     )
 
 
@@ -168,19 +253,155 @@ def restore_archive(project: SofaOptProject, archive: str | Path) -> Path:
     """Move an archive back to ``runtime/`` (it becomes the live run again).
 
     Any current run data is auto-archived first, so a restore can never
-    destroy anything. The restored run can then be resumed (its ``study.db``
-    is intact) and re-archived later. Returns the runtime dir.
+    destroy anything — that auto-archive keeps the outgoing run's own name
+    when it is itself a restored run, falling back to ``auto_before_restore``
+    for an unnamed one. The restored run can then be resumed (its ``study.db``
+    is intact) and re-archived later under its original name (see the restore
+    marker). Returns the runtime dir.
     """
     path = _resolve_archive(project, archive)
     if runtime_has_run_data(project):
-        archive_run(project, name="auto_before_restore")
+        outgoing = _read_restore_marker(project).get("name") or "auto_before_restore"
+        archive_run(project, name=outgoing)
     elif project.runtime_dir.exists():
         shutil.rmtree(project.runtime_dir)  # empty scaffold from a fresh start
 
+    info = load_archive_info(path)  # capture identity BEFORE dropping the manifest
     (path / MANIFEST_NAME).unlink(missing_ok=True)  # live runs carry no manifest
-    shutil.move(str(path), str(project.runtime_dir))
+    _move_with_retry(path, project.runtime_dir)
+    _write_restore_marker(project, info)
     logger.info(f"[archive] Restored {path.name} -> {project.runtime_dir}")
     return project.runtime_dir
+
+
+# ---------------------------------------------------------------------------
+# Run summary stats (generic — recorded results only, no domain knowledge)
+# ---------------------------------------------------------------------------
+
+def _pop_std(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    return (sum((v - mean) ** 2 for v in values) / len(values)) ** 0.5
+
+
+def _numeric_param_names(completed: list[dict]) -> list[str]:
+    """Numeric params that actually VARIED across the run — the searched
+    dimensions. Constants (frozen params, fixed knobs) are excluded so they
+    never clutter a per-param view or skew a diversity aggregate."""
+    seen: dict[str, set] = {}
+    for r in completed:
+        for key, val in (r.get("params") or {}).items():
+            if isinstance(val, (int, float)):
+                seen.setdefault(key, set()).add(val)
+    return [k for k, vals in seen.items() if len(vals) > 1]
+
+
+def _param_values(records: list[dict], name: str) -> list[float]:
+    return [r["params"][name] for r in records if isinstance(r.get("params", {}).get(name), (int, float))]
+
+
+def _diversity_collapse_pct(completed: list[dict], k_gens: int = 5) -> float | None:
+    """How much the searched population narrowed, in [0, 100] (0 = no
+    narrowing, 100 = fully converged). Mean over each numeric param that
+    actually VARIED early of ``1 - final_std/initial_std`` (first k gens vs
+    last k gens). Bounded and aggregate, so a single near-frozen param can't
+    dominate and truly-constant params (never varied) drop out. Generic —
+    reads only ``params``. ``None`` when there are too few generations."""
+    by_gen: dict[int, list[dict]] = {}
+    for r in completed:
+        by_gen.setdefault(r.get("gen_index", 0), []).append(r)
+    gens = sorted(by_gen)
+    if len(gens) < 4:
+        return None
+    half = min(k_gens, len(gens) // 2)
+    first = [r for g in gens[:half] for r in by_gen[g]]
+    last = [r for g in gens[-half:] for r in by_gen[g]]
+    collapses: list[float] = []
+    for name in _numeric_param_names(completed):
+        s0 = _pop_std(_param_values(first, name))
+        if s0 <= 1e-9:  # never varied early -> not a searched dimension here
+            continue
+        s1 = _pop_std(_param_values(last, name))
+        collapses.append(max(0.0, 1.0 - s1 / s0))
+    if not collapses:
+        return None
+    return round(100.0 * sum(collapses) / len(collapses), 1)
+
+
+def _final_param_stats(completed: list[dict]) -> dict:
+    """Per searched (varying) numeric param: the FINAL generation's population
+    mean and std — where each run's search actually settled per parameter, not
+    just its single best point. Powers the same-case in-depth comparison."""
+    by_gen: dict[int, list[dict]] = {}
+    for r in completed:
+        by_gen.setdefault(r.get("gen_index", 0), []).append(r)
+    if not by_gen:
+        return {}
+    finals = by_gen[max(by_gen)]
+    out: dict[str, dict] = {}
+    for name in _numeric_param_names(completed):
+        vals = _param_values(finals, name)
+        if vals:
+            out[name] = {"mean": round(sum(vals) / len(vals), 3), "std": round(_pop_std(vals), 3)}
+    return out
+
+
+def _trials_to_fraction(completed: list[dict], best: float, frac: float) -> int | None:
+    """First evaluation (1-based chron) reaching ``frac`` of the eventual best
+    — a convergence-speed proxy. ``None`` when best is non-positive (the
+    fraction is meaningless) or never reached."""
+    if best <= 0:
+        return None
+    target = best * frac
+    for r in completed:  # chronological (load_trial_records order preserved)
+        if r.get("final_score", float("-inf")) >= target:
+            return r.get("chron", 0) + 1
+    return None
+
+
+# Bump when run_summary_stats's schema changes so stored manifests recompute
+# instead of showing stale/absent fields (see _ensure_summary_stats).
+_STATS_VERSION = 2
+
+
+def run_summary_stats(trials_dir: Path, *, records: list[dict] | None = None) -> dict:
+    """Compact, generic convergence/diversity summary for one run.
+
+    Everything from recorded results only (``final_score``, ``params``,
+    ``gen_index``, ``failed``) plus restart-event count — no domain concepts,
+    so it works for any project. Stored in the archive manifest at archive
+    time and shown side-by-side in the Archives comparison. Pass ``records``
+    to reuse an already-loaded list (the archive-time caller has one).
+    """
+    from sofaopt.core.restart_events import load_restart_events
+
+    if records is None:
+        records = load_trial_records(trials_dir)
+    completed = [
+        r for r in records
+        if not r.get("failed") and isinstance(r.get("final_score"), (int, float))
+    ]
+    n_failed = sum(1 for r in records if r.get("failed"))
+    if not completed:
+        return {"version": _STATS_VERSION, "n_completed": 0, "n_failed": n_failed}
+
+    scores = [r["final_score"] for r in completed]
+    best = max(scores)
+    final_gen = max(r.get("gen_index", 0) for r in completed)
+    final_scores = [r["final_score"] for r in completed if r.get("gen_index") == final_gen]
+    return {
+        "version": _STATS_VERSION,
+        "n_completed": len(completed),
+        "n_failed": n_failed,
+        "mean_score": round(sum(scores) / len(scores), 3),
+        "final_mean": round(sum(final_scores) / len(final_scores), 3),
+        "final_std": round(_pop_std(final_scores), 3),
+        "trials_to_90pct_best": _trials_to_fraction(completed, best, 0.9),
+        "diversity_collapse_pct": _diversity_collapse_pct(completed),
+        "final_param_stats": _final_param_stats(completed),
+        "n_restarts": len(load_restart_events(trials_dir)),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +431,39 @@ def best_so_far_curve(trials_dir: Path) -> tuple[list[int], list[float]]:
     return xs, ys
 
 
+def case_signature(snapshot: dict, test_names: list[str]) -> tuple:
+    """A run's 'problem identity': its searched parameter space + test set.
+
+    Two runs share a case when this matches — only then is a per-parameter
+    comparison meaningful (same knobs, same objective). Frozen params
+    (``low == high``) are excluded so freezing an unused knob doesn't split
+    otherwise-identical cases.
+    """
+    params = tuple(sorted(
+        (p.get("name"), p.get("type"), p.get("low"), p.get("high"))
+        for p in snapshot.get("params", [])
+        if p.get("low") != p.get("high")
+    ))
+    return (params, tuple(sorted(test_names)))
+
+
+def _ensure_summary_stats(path: Path, info: ArchiveInfo) -> dict:
+    """Return an archive's stored summary stats, computing + persisting them
+    for archives that predate the feature or carry an older schema version
+    (write-through backfill: the first comparison pays the walk, later ones
+    are instant).
+    """
+    if info.summary_stats.get("version") == _STATS_VERSION:
+        return info.summary_stats
+    stats = run_summary_stats(info.trials_dir)
+    with contextlib.suppress(Exception):  # read-path best-effort: never fail a comparison
+        manifest_path = path / MANIFEST_NAME
+        data = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+        data["summary_stats"] = stats
+        manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return stats
+
+
 def comparison_data(
     project: SofaOptProject,
     archives: list[str | Path],
@@ -219,8 +473,8 @@ def comparison_data(
     """Comparison series for N archives (and optionally the live run).
 
     One entry per run: ``{label, curve: (xs, ys), info: ArchiveInfo | None,
-    best_score, best_params, n_trials, sampler, notes}`` — everything read
-    from recorded results, nothing recomputed.
+    best_score, best_params, n_trials, sampler, notes, summary_stats}`` —
+    everything read from recorded results, nothing recomputed.
     """
     from sofaopt.core.restart_events import load_restart_events
 
@@ -239,6 +493,8 @@ def comparison_data(
                 "notes": info.notes,
                 "info": info,
                 "restarts": load_restart_events(info.trials_dir),
+                "summary_stats": _ensure_summary_stats(path, info),
+                "case_signature": case_signature(info.project_snapshot, info.test_names),
             }
         )
     if include_current and runtime_has_run_data(project):
@@ -256,6 +512,10 @@ def comparison_data(
                 "notes": "",
                 "info": None,
                 "restarts": load_restart_events(project.trials_dir),
+                "summary_stats": run_summary_stats(project.trials_dir, records=records),
+                "case_signature": case_signature(
+                    project_to_jsonable(project), [t.name for t in project.tests]
+                ),
             }
         )
     return entries

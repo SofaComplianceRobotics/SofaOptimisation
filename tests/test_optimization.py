@@ -108,18 +108,33 @@ def test_env_overrides_applied(monkeypatch=None):
     from sofaopt.core.orchestrator import _apply_env_overrides
 
     project = _minimal_project(sampler="cmaes", seed_sampler="random", cmaes_with_margin=False)
-    saved = {k: os.environ.get(k) for k in
-             (envkeys.SAMPLER, envkeys.SEED_SAMPLER, envkeys.CMAES_MARGIN, envkeys.N_PARALLEL)}
+    applied = {
+        envkeys.SAMPLER: "gp",
+        envkeys.SEED_SAMPLER: "sobol",
+        envkeys.CMAES_MARGIN: "1",
+        envkeys.N_PARALLEL: "4",
+        # Restart/convergence-row keys (dashboard's second optimizer row).
+        envkeys.CMAES_RESTARTS: "5",
+        envkeys.STALL_GENERATIONS: "8",
+        envkeys.CMAES_INC_POPSIZE: "3",
+        envkeys.RESTART_ON_CONVERGENCE: "1",
+        envkeys.WARM_RESTARTS: "1",
+        envkeys.DEDUP_TRIALS: "1",
+    }
+    saved = {k: os.environ.get(k) for k in applied}
     try:
-        os.environ[envkeys.SAMPLER] = "gp"
-        os.environ[envkeys.SEED_SAMPLER] = "sobol"
-        os.environ[envkeys.CMAES_MARGIN] = "1"
-        os.environ[envkeys.N_PARALLEL] = "4"
+        os.environ.update(applied)
         out = _apply_env_overrides(project)
         assert out.sampler == "gp"
         assert out.seed_sampler == "sobol"
         assert out.cmaes_with_margin is True
         assert out.n_parallel == 4
+        assert out.cmaes_restarts == 5
+        assert out.stall_generations == 8
+        assert out.cmaes_inc_popsize == 3
+        assert out.restart_on_convergence is True
+        assert out.warm_restarts is True
+        assert out.dedup_trials is True
         # Original project is unchanged (frozen dataclass → replace returns a copy).
         assert project.sampler == "cmaes"
     finally:

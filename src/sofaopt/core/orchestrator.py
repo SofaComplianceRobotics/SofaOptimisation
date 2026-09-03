@@ -11,6 +11,8 @@ import time
 
 from pathlib import Path
 
+import optuna
+
 from sofaopt.core import envkeys
 from sofaopt.core.algorithm import _seed_sampler, build_study, recover_interrupted_trials
 from sofaopt.core.restart import maybe_restart, restart_index, restart_popsize
@@ -19,6 +21,7 @@ from sofaopt.core.generation.runner import run_generation
 from sofaopt.core.generation.types import RunHistory
 from sofaopt.core.runconfig import RunConfig
 from sofaopt.core.runtime_dirs import (
+    attach_run_log_file,
     configure_console_logging,
     last_gen_index,
     reset_trials_dir,
@@ -87,16 +90,26 @@ def _apply_env_overrides(project: SofaOptProject) -> SofaOptProject:
     seed = os.environ.get(envkeys.SEED_SAMPLER)
     if seed in ("random", "sobol"):
         overrides["seed_sampler"] = seed
-    margin = os.environ.get(envkeys.CMAES_MARGIN)
-    if margin is not None:
-        overrides["cmaes_with_margin"] = margin.strip().lower() in ("1", "true", "yes", "on")
-    converged = os.environ.get(envkeys.RUN_UNTIL_CONVERGED)
-    if converged is not None:
-        overrides["run_until_converged"] = converged.strip().lower() in ("1", "true", "yes", "on")
+    prune = os.environ.get(envkeys.PRUNE_MODE)
+    if prune in ("off", "shadow", "kill"):
+        overrides["prune_mode"] = prune
+    for key, field in (
+        (envkeys.CMAES_MARGIN, "cmaes_with_margin"),
+        (envkeys.RUN_UNTIL_CONVERGED, "run_until_converged"),
+        (envkeys.RESTART_ON_CONVERGENCE, "restart_on_convergence"),
+        (envkeys.WARM_RESTARTS, "warm_restarts"),
+        (envkeys.DEDUP_TRIALS, "dedup_trials"),
+    ):
+        raw = os.environ.get(key)
+        if raw is not None:
+            overrides[field] = raw.strip().lower() in ("1", "true", "yes", "on")
     for key, field in (
         (envkeys.N_PARALLEL, "n_parallel"),
         (envkeys.N_GENERATIONS, "n_generations"),
         (envkeys.RESTART_PATIENCE, "restart_patience"),
+        (envkeys.CMAES_RESTARTS, "cmaes_restarts"),
+        (envkeys.STALL_GENERATIONS, "stall_generations"),
+        (envkeys.CMAES_INC_POPSIZE, "cmaes_inc_popsize"),
     ):
         raw = os.environ.get(key)
         if raw:
@@ -206,6 +219,11 @@ def run_optimization(
         project = _apply_env_overrides(project)
         cfg = RunConfig.from_env(project)
 
+    # One canonical run log every launch path writes, so the dashboard can tail
+    # a run it did not spawn (CLI / run.py). Attached here — before _run's
+    # possible auto-archive — is safe because logs_dir sits outside runtime/.
+    attach_run_log_file(project.logs_dir, truncate=not project.db_path.exists())
+
     # At most one optimizer per study: a second process resuming the same
     # study.db fails the first one's in-flight trials (see core/runlock.py).
     lock = acquire_run_lock(project.runtime_dir)
@@ -297,6 +315,37 @@ def _best_value(study) -> float | None:
         return None
 
 
+def _use_convergence_trigger(project) -> bool:
+    """Convergence-triggered restarts apply only to single-objective CMA-ES."""
+    return (
+        project.restart_on_convergence
+        and project.sampler == "cmaes"
+        and not project.multi_objective
+    )
+
+
+def _cma_converged(study) -> bool:
+    """True once the CMA-ES sampler's internal optimizer has actually converged
+    (``should_stop``) — the honest restart trigger, versus the best-plateau
+    heuristic that fires while the search is still productive.
+
+    Reached through the sampler's private ``_restore_optimizer`` seam (the same
+    interface the restart scoping relies on). Returns False when no optimizer is
+    restorable yet — early generations, or just after a restart — which also
+    prevents a restart storm (the fresh restart reads 'not converged')."""
+    restore = getattr(study.sampler, "_restore_optimizer", None)
+    if restore is None:
+        return False
+    try:
+        completed = study.get_trials(
+            deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,)
+        )
+        optimizer = restore(completed)
+        return bool(optimizer is not None and optimizer.should_stop())
+    except Exception:
+        return False
+
+
 class _RestartProductivity:
     """Tracks whether restarts keep paying off (``run_until_converged``).
 
@@ -342,6 +391,11 @@ def _compute_restart_state(study, project, stall: "_StallTracker", fruitless_str
         "fruitless_streak": fruitless_streak,
         "restart_patience": project.restart_patience,
         "run_until_converged": project.run_until_converged,
+        # Whether stall_count is the live restart trigger or just along for the
+        # display ride (see _run's comment above `stalled = stall.should_stop`):
+        # with a convergence trigger active, stall_count can run past
+        # stall_limit indefinitely without ever firing a restart.
+        "convergence_trigger": _use_convergence_trigger(project),
     }
 
 
@@ -371,8 +425,8 @@ def _handle_stall(
         stall.reset()
         return False
     logger.info(
-        f"[stall] Best score unchanged for {stall.count} generations "
-        f"— stopping early at generation {gen}/{total_gens}."
+        f"[stop] No further restart available — stopping early at "
+        f"generation {gen}/{total_gens}."
     )
     return True
 
@@ -423,7 +477,13 @@ def _run(project: SofaOptProject, cfg: RunConfig) -> None:
         _print_best_so_far(study, project)
         prune_count = _maybe_prune_recordings(project, gen, prune_count)
 
-        if stall.should_stop(study) and _handle_stall(
+        # Keep the stall tracker updated every generation (its count/best drive
+        # the dashboard patience display), but use CMA-ES's real convergence as
+        # the restart trigger when configured — the plateau heuristic fires
+        # while the search is still productive and makes restarts net-harmful.
+        stalled = stall.should_stop(study)
+        triggered = _cma_converged(study) if _use_convergence_trigger(project) else stalled
+        if triggered and _handle_stall(
             study, project, stall, productivity, gen=gen, history=history,
             total_gens=total_gens,
         ):

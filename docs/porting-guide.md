@@ -88,6 +88,26 @@ Key properties:
   to debug), `trial.params == {}` and `trial.is_optimizing == False`, so guard
   scoring with `if trial.is_optimizing:` and your scene still runs interactively.
 
+### Optional: an anytime score for multi-fidelity pruning
+
+If the test opts into step pruning (`TestSpec.prunable`, with a calibrated
+`prune_rungs` schedule and the project's `prune_mode`), the scene must
+periodically report the score the run *would receive if it ended now* —
+`trial.report_progress(score, frame, total)` bundles it with the progress
+write above (it lands as `partial_score` in the run status):
+
+```python
+        if self.step % 5 == 0:                     # modest cadence is enough
+            trial.report_progress(self.score_so_far(), self.step, self.horizon)
+```
+
+Observation only — computing it must never feed back into the physics. At
+each rung the optimizer ranks the generation's candidates by this value and
+stops the hopeless bottom early (`"shadow"` mode first: it only logs the
+would-kill decisions). Calibrate rung steps from a trace-replay study, not by
+guessing — see `examples/prefix_pruning_study/` and
+`docs/design/multi-fidelity.md`.
+
 ### What the scene receives (env, set automatically)
 
 | `trial.` field | from env key | meaning |
@@ -282,7 +302,17 @@ and ready-made recipes — lives in the
 
 ## 7. Run it
 
-Headless (`run.py`):
+Headless, from a terminal — no `run.py` needed (the `sofaopt` command loads your
+`project.py` and overlays optional flags):
+
+```bash
+sofaopt path/to/project.py
+sofaopt path/to/project.py --sampler tpe --parallel 8 --gens 50 --prune-mode shadow
+# equivalently: python -m sofaopt path/to/project.py ...
+```
+
+Or from Python (a one-line `run.py` still works and is what the dashboard's
+Run button spawns via `run_script`):
 
 ```python
 from sofaopt import run_optimization
@@ -290,8 +320,9 @@ from project import PROJECT
 run_optimization(PROJECT)
 ```
 
-Dashboard (`dashboard.py`): select tests + weights, Run/Stop, live progress,
-leaderboard, parameter-bounds heatmap:
+Dashboard (`dashboard.py`): the **Run** tab selects tests + weights, sets the
+sampler/pruning, and Starts/Pauses; **Monitor**/**Results**/**Parameters** show
+live progress, the leaderboard, and the parameter table + bounds heatmap:
 
 ```python
 from sofaopt import launch_dashboard
@@ -300,7 +331,9 @@ launch_dashboard(PROJECT, port=8050)
 ```
 
 Artifacts land under `work_dir/runtime/` (`trials/gen_XXXX/trial_YY/…`,
-`study.db`, `trials/progress.json`).
+`study.db`, `trials/progress.json`). Every launch path writes one run log at
+`work_dir/logs/optimize.log` (level-tagged), which the dashboard's log window
+tails regardless of who started the run.
 
 **Archiving.** Starting a **fresh** run (no existing `study.db` to resume) no
 longer wipes `runtime/` — it *moves* it to `work_dir/archives/<timestamp>_auto/`

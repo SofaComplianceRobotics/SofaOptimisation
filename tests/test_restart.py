@@ -16,9 +16,12 @@ from sofaopt.core.restart import (
     RESTART_ATTR,
     _random_x0,
     _RestartScopedCmaEsSampler,
+    _WARM_SIGMA_INFLATE,
+    build_restart_sampler,
     maybe_restart,
     restart_index,
     restart_popsize,
+    warm_x0,
 )
 from sofaopt.project import ParamSpec, SofaOptProject, TestSpec
 
@@ -52,12 +55,29 @@ def _objective(trial) -> float:
 
 
 def test_restart_config_validation(tmp_path):
-    with pytest.raises(ValueError, match="stall_generations"):
+    with pytest.raises(ValueError, match="restart trigger"):
         _project(tmp_path, cmaes_restarts=1, stall_generations=0)
     with pytest.raises(ValueError, match="cmaes_restarts"):
         _project(tmp_path, cmaes_restarts=-1)
     with pytest.raises(ValueError, match="cmaes_inc_popsize"):
         _project(tmp_path, cmaes_inc_popsize=0)
+    with pytest.raises(ValueError, match="warm_restarts"):
+        _project(tmp_path, cmaes_restarts=0, stall_generations=0, warm_restarts=True)
+
+
+def test_convergence_trigger_is_a_valid_restart_trigger(tmp_path):
+    # restart_on_convergence replaces the stall plateau as the trigger, so
+    # stall_generations > 0 is no longer required.
+    project = _project(
+        tmp_path, cmaes_restarts=2, stall_generations=0, restart_on_convergence=True
+    )
+    assert project.restart_on_convergence
+    # ...and it can drive run_until_converged without a stall limit.
+    conv = _project(
+        tmp_path, cmaes_restarts=4, stall_generations=0, restart_on_convergence=True,
+        run_until_converged=True, restart_patience=2,
+    )
+    assert conv.run_until_converged
 
 
 def _restart(study, project, sampler, *, gen=1, trial_chron=0):
@@ -193,6 +213,70 @@ def test_build_study_resume_restores_restart_sampler(tmp_path):
     s1.set_user_attr(RESTART_ATTR, 0)
     s3 = build_study(db, cfg, resume=True)
     assert not isinstance(s3.sampler, _RestartScopedCmaEsSampler)
+
+
+def test_warm_x0_filters_to_searched_float_int_params(tmp_path):
+    project = _project(
+        tmp_path,
+        params=[
+            ParamSpec("x", "float", 0.0, 1.0, default=0.5),
+            ParamSpec("n", "int", 1, 8, default=4),
+            ParamSpec("frozen", "float", 5.0, 5.0, default=5.0),
+            ParamSpec("flag", "bool", default=True),
+        ],
+    )
+    incumbent = {"x": 0.7, "n": 6, "frozen": 5.0, "flag": False, "stray": 9.0}
+    x0 = warm_x0(project, incumbent)
+    assert x0 == {"x": 0.7, "n": 6}  # frozen, bool, and unknown keys excluded
+
+
+def test_build_restart_sampler_warm_uses_incumbent_and_inflated_sigma(tmp_path):
+    project = _project(tmp_path, cmaes_sigma0=0.3)
+    warm = {"x": 0.7, "y": 0.2}
+    sampler = build_restart_sampler(project, 1, optuna.samplers.RandomSampler(), warm_start=warm)
+    assert sampler._x0 == warm
+    assert sampler._sigma0 == project.cmaes_sigma0 * _WARM_SIGMA_INFLATE
+    # Cold restart (no warm_start) keeps the base sigma and a random x0.
+    cold = build_restart_sampler(project, 1, optuna.samplers.RandomSampler())
+    assert cold._sigma0 == project.cmaes_sigma0
+    assert cold._x0 != warm
+
+
+def test_warm_restart_seeds_from_incumbent(tmp_path):
+    project = _project(tmp_path, warm_restarts=True)
+    project.trials_dir.mkdir(parents=True, exist_ok=True)
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=optuna.samplers.CmaEsSampler(popsize=4, n_startup_trials=2, seed=1),
+    )
+    study.optimize(_objective, n_trials=12)
+    event = maybe_restart(
+        study, project, optuna.samplers.RandomSampler(), gen=3, trial_chron=12
+    )
+    assert event is not None
+    # The new sampler's x0 is the incumbent's searched params, not random.
+    assert study.sampler._x0 == warm_x0(project, study.best_trial.params)
+
+
+def test_cma_converged_seam(tmp_path):
+    """The convergence trigger's seam: should_stop becomes reachable+True once
+    a CMA-ES study converges. Trips if Optuna moves the _restore_optimizer API."""
+    from sofaopt.core.orchestrator import _cma_converged
+
+    study = optuna.create_study(
+        direction="minimize",
+        sampler=optuna.samplers.CmaEsSampler(
+            x0={"x0": 0.0, "x1": 0.0}, sigma0=0.2, popsize=6, n_startup_trials=6
+        ),
+    )
+
+    def sphere(t):
+        return sum(t.suggest_float(f"x{i}", -5.0, 5.0) ** 2 for i in range(2))
+
+    assert not _cma_converged(study)  # nothing converged early
+    study.optimize(sphere, n_trials=6 * 120)
+    assert _cma_converged(study)      # a converged sphere reports should_stop
+    assert study.best_value < 1e-6
 
 
 def test_stall_tracker_reset_gives_full_patience_again():
